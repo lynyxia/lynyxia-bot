@@ -17,7 +17,7 @@ from pydantic import SecretStr
 
 from bot.config import DatabaseSettings
 from bot.database.models import Base, Channel, User
-from bot.database.repositories import ChatMessageRepository
+from bot.database.repositories import ChatMessageRepository, OAuthTokenRepository
 from bot.services.database import DatabaseService
 
 TEST_DATABASE_URL = os.getenv("TEST_DATABASE_URL")
@@ -69,6 +69,19 @@ async def test_repository_roundtrip() -> None:
         user_quote = await repository.get_random_by_user("7", "CHATTER")
         assert user_quote is not None
         assert user_quote.content == "hello world"
+
+        tokens = OAuthTokenRepository(database)
+        assert await tokens.get("42") is None
+        await tokens.save("42", "access-1", "refresh-1", "user:read:chat")
+        stored = await tokens.get("42")
+        assert stored is not None
+        assert stored.access_token == "access-1"
+        await tokens.save("42", "access-2", "refresh-2", "user:read:chat")
+        rotated = await tokens.get("42")
+        assert rotated is not None
+        assert rotated.access_token == "access-2"
+        await tokens.delete("42")
+        assert await tokens.get("42") is None
     finally:
         async with database._engine.begin() as connection:
             await connection.run_sync(Base.metadata.drop_all)

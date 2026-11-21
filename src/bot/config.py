@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from pydantic import BaseModel, Field, SecretStr
+from pydantic import BaseModel, Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -17,8 +17,63 @@ class TwitchSettings(BaseModel):
     client_id: str = Field(min_length=1)
     client_secret: SecretStr
     bot_username: str = Field(min_length=1)
-    oauth_token: SecretStr
-    channel: str = Field(min_length=1)
+    # TwitchIO 3 uses EventSub, which needs stable numeric IDs, not logins.
+    bot_id: str = Field(min_length=1)
+    # A single bot can listen in multiple channels. Names are informational;
+    # IDs are what EventSub subscriptions use. A single string is accepted for
+    # backwards compatibility and normalized to a one-element list.
+    channel: list[str] = Field(min_length=1)
+    channel_id: list[str] = Field(min_length=1)
+    # OAuth is managed by the bot: it persists tokens in PostgreSQL and
+    # refreshes them automatically. Only the app credentials are configured.
+    oauth_redirect_uri: str = "http://localhost:8080/oauth/callback"
+    oauth_bind_host: str = "0.0.0.0"
+    oauth_port: int = 8080
+    oauth_scopes: list[str] = Field(
+        default_factory=lambda: [
+            "user:read:chat",
+            "user:write:chat",
+            "user:bot",
+            "channel:bot",
+        ]
+    )
+
+    @field_validator("bot_id")
+    @classmethod
+    def _validate_bot_id(cls, value: str) -> str:
+        if not value.isdigit():
+            raise ValueError("Twitch IDs must be numeric strings")
+        return value
+
+    @field_validator("channel", "channel_id", "oauth_scopes", mode="before")
+    @classmethod
+    def _as_list(cls, value: object) -> object:
+        return [value] if isinstance(value, str) else value
+
+    @field_validator("channel_id")
+    @classmethod
+    def _validate_channel_ids(cls, value: list[str]) -> list[str]:
+        for channel_id in value:
+            if not channel_id.isdigit():
+                raise ValueError("Twitch channel IDs must be numeric strings")
+        return value
+
+    @model_validator(mode="after")
+    def _check_channels(self) -> TwitchSettings:
+        if not self.channel_id:
+            raise ValueError("At least one channel ID is required")
+        if len(set(self.channel_id)) != len(self.channel_id):
+            raise ValueError("Channel IDs must be unique")
+        if len(self.channel) != len(self.channel_id):
+            raise ValueError("BOT_TWITCH__CHANNEL and BOT_TWITCH__CHANNEL_ID must match in length")
+        return self
+
+    @field_validator("oauth_redirect_uri")
+    @classmethod
+    def _validate_redirect_uri(cls, value: str) -> str:
+        if not value.startswith(("http://", "https://")):
+            raise ValueError("OAuth redirect URI must be an http(s) URL")
+        return value.rstrip("/")
 
 
 class DatabaseSettings(BaseModel):

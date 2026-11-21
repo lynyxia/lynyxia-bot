@@ -36,6 +36,9 @@ services:
     depends_on:
       db:
         condition: service_healthy
+    ports:
+      # OAuth callback: reachable from the browser on the host.
+      - "${BOT_TWITCH__OAUTH_PORT:-8080}:${BOT_TWITCH__OAUTH_PORT:-8080}"
     logging: *logging
 
 volumes:

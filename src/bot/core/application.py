@@ -54,16 +54,27 @@ class Application:
 
     def _create_bot(self) -> Any:
         # Imported lazily so unit tests don't need a TwitchIO event loop.
-        from bot.core.bot import BotClient
+        from bot.core.bot import BotAdapter, BotClient
+        from bot.database.repositories.oauth_token import OAuthTokenRepository
 
         twitch = self.settings.twitch
+        adapter = BotAdapter(
+            host=twitch.oauth_bind_host,
+            port=twitch.oauth_port,
+            redirect_path="oauth/callback",
+            oauth_path="oauth",
+        )
         return BotClient(
             router=self.router,
-            token=twitch.oauth_token.get_secret_value(),
             client_id=twitch.client_id,
-            nick=twitch.bot_username,
+            client_secret=twitch.client_secret.get_secret_value(),
+            bot_id=twitch.bot_id,
+            channel_ids=twitch.channel_id,
+            redirect_uri=twitch.oauth_redirect_uri,
+            scopes=twitch.oauth_scopes,
+            token_store=OAuthTokenRepository(self.database),
+            adapter=adapter,
             prefix="!",
-            initial_channels=[twitch.channel],
         )
 
     async def start(self) -> None:
@@ -85,7 +96,14 @@ class Application:
         if start is None:
             return
         try:
-            result: Awaitable[None] | None = start()
+            # TwitchIO mints an app token from the client secret. The user
+            # token is loaded from PostgreSQL via BotClient.load_tokens(),
+            # and the adapter serves the one-time OAuth callback.
+            result: Awaitable[None] | None = start(
+                with_adapter=True,
+                load_tokens=True,
+                save_tokens=True,
+            )
             if inspect.isawaitable(result):
                 await result
         except asyncio.CancelledError:

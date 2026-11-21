@@ -97,26 +97,68 @@ docker compose logs -f bot
 ## 4. Twitch application registration
 
 1. Go to <https://dev.twitch.tv/console/apps> and **Register Your Application**.
-2. Name it, set the OAuth Redirect URL to `http://localhost` (a bot using the
-   client credentials flow does not need a live callback).
-3. Choose category **Chat Bot**.
+2. Name it, choose category **Chat Bot**.
+3. Set the **OAuth Redirect URL** to exactly
+   `http://localhost:8080/oauth/callback` (or whatever you configure in
+   `BOT_TWITCH__OAUTH_REDIRECT_URI`). The bot serves this callback itself.
 4. Copy the **Client ID** into `BOT_TWITCH__CLIENT_ID` and generate a
    **Client Secret** into `BOT_TWITCH__CLIENT_SECRET`.
 
-### OAuth configuration
+### OAuth configuration (bot-managed)
 
-The bot connects with a user OAuth token for the dedicated bot account. Use an
-IRC-focused token generator (e.g. <https://twitchapps.com/tmi/>) while logged
-in as the bot account, and paste the full value **including the `oauth:` prefix**
-into `BOT_TWITCH__OAUTH_TOKEN`.
+`BOT_TWITCH__CLIENT_SECRET` is **required** by TwitchIO 3.x — it validates the
+app and mints the app token used for general API calls.
 
-Set:
+TwitchIO 3 delivers chat through **EventSub**, not IRC, so an IRC/TMI token is
+not useful here. You do **not** configure a user token manually. On first start
+the bot:
 
-- `BOT_TWITCH__BOT_USERNAME` — the bot account's login name.
-- `BOT_TWITCH__CHANNEL` — the channel the bot should join.
-- `BOT_ADMIN_USER_IDS` — JSON list of Twitch **user IDs** allowed to run admin
-  commands. Find an ID at <https://www.twitch.tv/yourname> → use an ID lookup
-  service or the Twitch API. Store IDs, not display names.
+1. Logs a one-time authorization URL.
+2. Serves the OAuth callback on `BOT_TWITCH__OAUTH_PORT` via TwitchIO's built-in
+   aiohttp adapter (no Starlette dependency).
+3. Stores the resulting access + refresh token in the `oauth_tokens`
+   PostgreSQL table.
+4. Refreshes the token automatically and persists rotations to that table, so
+   restarts keep working.
+
+Open the logged URL once and log in as the **bot account**, granting:
+
+```
+user:read:chat user:write:chat user:bot channel:bot
+```
+
+The callback port is published by Compose. If the bot runs on a remote host,
+set `BOT_TWITCH__OAUTH_REDIRECT_URI` to a publicly reachable URL and configure
+the app registration accordingly.
+
+EventSub also needs stable numeric IDs, not login names:
+
+- `BOT_TWITCH__BOT_ID` — the bot account's numeric user ID
+  (`twitch api get users -q login=<bot-login>`).
+- `BOT_TWITCH__CHANNEL_ID` — a JSON array of the numeric user IDs of **every**
+  channel the bot should join.
+- `BOT_TWITCH__CHANNEL` — a matching JSON array of channel login names, used
+  for logging/readability. The two arrays must have the same length.
+
+The bot listens in multiple channels at once. Single strings are still
+accepted and normalized to one-element arrays:
+
+```bash
+BOT_TWITCH__CHANNEL=["first-channel","second-channel"]
+BOT_TWITCH__CHANNEL_ID=["987654321","123123123"]
+```
+
+`BOT_ADMIN_USER_IDS` is a JSON list of Twitch **user IDs** allowed to run admin
+commands — store IDs, never display names.
+
+Once a token exists, the bot subscribes to `channel.chat.message` for **each**
+ID in `BOT_TWITCH__CHANNEL_ID`. Each `CommandContext` carries the originating
+channel's ID and name, and `ctx.reply()` answers in that same channel. Token
+values are never logged, and no token file is written to disk.
+
+> **Startup log note:** `twitchio.client: If you require the StarletteAdapter
+> please install ... 'pip install twitchio[starlette]'` is informational. This
+> bot uses the built-in aiohttp adapter, so the extra package is not needed.
 
 ---
 
@@ -128,8 +170,13 @@ All variables are read in `src/bot/config.py`. Nested settings use `__`.
 | --- | --- |
 | `POSTGRES_USER`, `POSTGRES_PASSWORD`, `POSTGRES_DB` | PostgreSQL container credentials |
 | `BOT_TWITCH__CLIENT_ID`, `BOT_TWITCH__CLIENT_SECRET` | Twitch app credentials |
-| `BOT_TWITCH__BOT_USERNAME`, `BOT_TWITCH__OAUTH_TOKEN` | Bot account identity |
-| `BOT_TWITCH__CHANNEL` | Channel to join |
+| `BOT_TWITCH__BOT_USERNAME` | Bot account login (informational) |
+| `BOT_TWITCH__BOT_ID` | Bot account's numeric ID |
+| `BOT_TWITCH__CHANNEL_ID` | JSON array of numeric IDs for all channels |
+| `BOT_TWITCH__CHANNEL` | JSON array of matching channel names (informational) |
+| `BOT_TWITCH__OAUTH_REDIRECT_URI` | Public callback URL registered with Twitch |
+| `BOT_TWITCH__OAUTH_BIND_HOST`, `BOT_TWITCH__OAUTH_PORT` | Bind address/port for the callback server |
+| `BOT_TWITCH__OAUTH_SCOPES` | JSON array of scopes requested at authorization |
 | `BOT_DATABASE__HOST/PORT/USER/PASSWORD/NAME` | Database connection (host is overridden to `db` in Compose) |
 | `BOT_DATABASE__POOL_SIZE`, `BOT_DATABASE__MAX_OVERFLOW` | Connection pooling |
 | `BOT_DATABASE__CONNECT_RETRIES`, `BOT_DATABASE__CONNECT_RETRY_DELAY` | Startup readiness retries |
@@ -163,6 +210,8 @@ docker compose logs -f bot
 - Both containers use `restart: unless-stopped` and rotating JSON logs.
 - The Python image is multi-stage and runs as a non-root `bot` user.
 - Credentials come only from `.env`; none are baked into the image.
+- Compose publishes the OAuth callback port (default `8080`) so you can
+  complete the one-time authorization from your browser.
 
 Stop everything (data volume is preserved):
 
@@ -188,8 +237,9 @@ docker compose run --rm bot alembic downgrade -1
 ```
 
 Alembic reads the same validated `DatabaseSettings` as the application. The
-initial revision `0001` creates `channels`, `users` and `chat_messages`, using
-Twitch IDs as stable identifiers and appropriate indexes/constraints.
+revision `0001` creates `channels`, `users` and `chat_messages`, using Twitch
+IDs as stable identifiers and appropriate indexes/constraints. Revision `0002`
+adds `oauth_tokens` for the bot-managed token pair.
 
 ---
 
@@ -266,7 +316,7 @@ automatic. Removed or misspelled names are silently skipped with a log line.
 Inside a module, `self.context.services` provides:
 
 - `database` — `DatabaseService`; use `async with self.context.services.database.session() as session:` or an injected repository.
-- `twitch` — `await services.twitch.send_message(channel, text)`.
+- `twitch` — `await services.twitch.send_message(channel_id, text)` (sends to a specific channel by numeric ID).
 - `permissions` — `services.permissions.is_admin(ctx.author_id)` for admin commands.
 - `llm` — currently `None`; an `LLMProvider` implementation will be wired in with the AI module.
 
@@ -289,11 +339,12 @@ supported in this milestone.
 **Done in this milestone**
 
 - Centralized configuration with secret redaction and validation
-- Core lifecycle, graceful signal shutdown, Twitch connection wrapper
+- Core lifecycle, graceful signal shutdown, TwitchIO 3 EventSub chat subscription
 - Module discovery, config-based enable/disable, isolated lifecycle failures
 - Event/command router with unsubscribe support
 - Async database service with pooling and readiness retries
-- SQLAlchemy models, repositories and Alembic initial migration
+- SQLAlchemy models, repositories and Alembic migrations (schema + OAuth tokens)
+- Bot-managed Twitch OAuth with PostgreSQL persistence and automatic refresh
 - Multi-stage non-root Docker image, Compose with healthchecks and volumes
 - Unit + optional integration tests, Ruff configuration
 

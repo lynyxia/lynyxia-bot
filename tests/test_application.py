@@ -14,6 +14,12 @@ async def test_application_lifecycle(settings, fake_database, fake_bot) -> None:
 
     await asyncio.sleep(0)
     assert fake_bot.started
+    assert fake_bot.start_args[0] == ()
+    assert fake_bot.start_args[1] == {
+        "with_adapter": True,
+        "load_tokens": True,
+        "save_tokens": True,
+    }
 
     await app.stop()
     assert fake_bot.closed
