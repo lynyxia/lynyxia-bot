@@ -26,6 +26,7 @@ src/bot/
 │   └── permissions.py       # admin checks
 ├── modules/
 │   ├── base.py              # Module / ModuleContext contract
+│   ├── chat_logger/         # batched chat message persistence
 │   └── <feature>/           # one Module subclass per package
 ├── services/
 │   ├── database.py          # engine, session factory, pooling, retry
@@ -42,10 +43,14 @@ src/bot/
 
 - **Modules never import other modules.** They receive a `ModuleContext`
   containing their own config, an `EventRouter`, shared services and a logger.
-- **TwitchIO is isolated.** `core/bot.py` translates Twitch events into calls
-  on the router; modules see a plain `CommandContext`. This makes modules easy
-  to test without Twitch. *Trade-off:* we reimplement simple `!command`
-  prefix parsing instead of using TwitchIO's decorator command system.
+- **TwitchIO is isolated.** `core/bot.py` translates Twitch events into a
+  normalized `ChatMessageEvent` and `CommandContext`; modules never touch
+  TwitchIO objects. This makes modules easy to test without Twitch. *Trade-off:*
+  we reimplement simple `!command` prefix parsing instead of using TwitchIO's
+  decorator command system.
+- **Discovery walks packages recursively**, so a feature's `Module` subclass
+  may live in a submodule (e.g. `chat_logger/module.py`) while its package
+  `__init__.py` re-exports it.
 - **Discovery by package scanning.** `pkgutil` + `importlib` find `Module`
   subclasses inside `bot.modules`; `BOT_ENABLED_MODULES` decides which load.
   Entry-point plugins would allow external distributions but add packaging
@@ -190,10 +195,29 @@ Example module configuration:
 
 ```bash
 BOT_MODULE__AI_CHAT='{"system_prompt":"You are helpful.","cooldown_seconds":5}'
+BOT_MODULE__CHAT_LOGGER='{"batch_size":100,"flush_interval_seconds":2,"queue_maxsize":2000,"retention_days":30}'
 ```
 
-Modules read it via `self.context.config`. No secrets should be placed here
-in plain text that isn't already in the environment.
+Modules read it via `self.context.config` and validate it with their own
+Pydantic model. No secrets should be placed here in plain text that isn't
+already in the environment.
+
+### Chat logger settings
+
+| Key | Default | Purpose |
+| --- | --- | --- |
+| `batch_size` | `50` | Maximum messages per database write |
+| `flush_interval_seconds` | `2.0` | Maximum time a partial batch waits |
+| `queue_maxsize` | `1000` | Bounded queue; excess messages are dropped, never blocking chat |
+| `retention_days` | `null` | Future cleanup policy; repository support exists, scheduling does not |
+
+The logger enqueues normalized `ChatMessageEvent`s in `on_message()` and a
+single background worker writes batches. Channel/user rows are upserted in the
+same transaction, and duplicate Twitch message IDs are ignored. Each message
+stores both the stable Twitch `user_id` and the chatter's `username`. All
+timestamps are normalized to UTC before insertion, and every pooled database
+connection uses the UTC session timezone. On shutdown the queue is drained
+before the worker exits.
 
 ---
 
@@ -239,7 +263,8 @@ docker compose run --rm bot alembic downgrade -1
 Alembic reads the same validated `DatabaseSettings` as the application. The
 revision `0001` creates `channels`, `users` and `chat_messages`, using Twitch
 IDs as stable identifiers and appropriate indexes/constraints. Revision `0002`
-adds `oauth_tokens` for the bot-managed token pair.
+adds `oauth_tokens` for the bot-managed token pair; revision `0003` adds the
+chatter's `username` to each logged message.
 
 ---
 
@@ -275,6 +300,7 @@ subclass with a unique `name`:
 
 ```python
 # src/bot/modules/greeter/__init__.py
+from bot.core.event_router import ChatMessageEvent
 from bot.modules.base import Module
 
 
@@ -290,9 +316,9 @@ class GreeterModule(Module):
     async def on_hello(self, ctx) -> None:
         await ctx.reply(f"Hello @{ctx.author_name}!")
 
-    async def on_message(self, message) -> None:
-        # `message` is the raw TwitchIO Message. Keep heavy work off the
-        # event loop (e.g. schedule it with asyncio.create_task).
+    async def on_message(self, event: ChatMessageEvent) -> None:
+        # `event` is a normalized ChatMessageEvent (no TwitchIO objects).
+        # Keep heavy work off the event loop: enqueue it for a worker task.
         pass
 
     async def start(self) -> None:
@@ -336,7 +362,7 @@ supported in this milestone.
 
 ## 11. Status and outstanding work
 
-**Done in this milestone**
+**Milestone 1 — foundation (done)**
 
 - Centralized configuration with secret redaction and validation
 - Core lifecycle, graceful signal shutdown, TwitchIO 3 EventSub chat subscription
@@ -348,11 +374,16 @@ supported in this milestone.
 - Multi-stage non-root Docker image, Compose with healthchecks and volumes
 - Unit + optional integration tests, Ruff configuration
 
+**Milestone 2 — in progress**
+
+- Chat logger: normalized `ChatMessageEvent`, bounded queue, batched async
+  writes, atomic channel/user upserts, graceful drain on shutdown
+
 **Explicitly deferred to later milestones**
 
 - AI Chat (`!chat`, `!chatsettings` allowlist, LLM adapter, cooldowns)
 - Quotes (`!rq`, `!rq username`)
-- Chat logger batching/retention
+- Retention cleanup scheduling (repository method exists)
 - LLM provider dependency and concrete adapter
 - Hot-reloading
 

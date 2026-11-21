@@ -31,17 +31,35 @@ class ModuleManager:
         self.modules: dict[str, Module] = {}
 
     def discover(self) -> dict[str, type[Module]]:
-        """Return ``{name: class}`` for every discoverable module."""
+        """Return ``{name: class}`` for every discoverable module.
+
+        A feature may be a single module file or a package whose class lives
+        in a submodule, so packages are walked recursively.
+        """
         found: dict[str, type[Module]] = {}
         for module_info in pkgutil.iter_modules(modules_package.__path__):
-            module = importlib.import_module(f"{modules_package.__name__}.{module_info.name}")
-            for _, obj in inspect.getmembers(module, inspect.isclass):
-                if (
-                    issubclass(obj, Module)
-                    and obj is not Module
-                    and obj.__module__ == module.__name__
-                    and obj.name
-                ):
+            package_name = f"{modules_package.__name__}.{module_info.name}"
+            candidates = [importlib.import_module(package_name)]
+            if module_info.ispkg:
+                candidates.extend(
+                    importlib.import_module(child.name)
+                    for child in pkgutil.walk_packages(
+                        candidates[0].__path__, prefix=f"{package_name}."
+                    )
+                )
+
+            for candidate in candidates:
+                for _, obj in inspect.getmembers(candidate, inspect.isclass):
+                    if not (
+                        issubclass(obj, Module)
+                        and obj is not Module
+                        and obj.__module__ == candidate.__name__
+                        and obj.name
+                    ):
+                        continue
+                    if obj.name in found and found[obj.name] is not obj:
+                        log.warning("Duplicate module name %s; keeping first", obj.name)
+                        continue
                     found[obj.name] = obj
         return found
 

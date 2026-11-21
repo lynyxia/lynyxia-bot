@@ -11,6 +11,7 @@ import logging
 from collections import defaultdict
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
+from datetime import datetime
 from typing import Any
 
 log = logging.getLogger(__name__)
@@ -30,6 +31,26 @@ class CommandContext:
     channel_name: str
     content: str
     reply: Callable[[str], Awaitable[None]]
+    raw: Any = field(default=None, repr=False)
+
+
+@dataclass(frozen=True)
+class ChatMessageEvent:
+    """Normalized incoming chat message delivered to ``"message"`` handlers.
+
+    Modules consume this instead of TwitchIO objects, keeping them decoupled
+    from the chat library.
+    """
+
+    author_id: str
+    author_login: str
+    author_name: str
+    channel_id: str
+    channel_login: str
+    channel_name: str
+    content: str
+    message_id: str | None
+    sent_at: datetime | None
     raw: Any = field(default=None, repr=False)
 
 

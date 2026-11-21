@@ -1,9 +1,10 @@
 """Checks the TwitchIO 3.x EventSub and OAuth integration."""
 
+from datetime import UTC, datetime, timedelta, timezone
 from unittest.mock import AsyncMock
 
 from bot.core.bot import BotClient
-from bot.core.event_router import CommandContext, EventRouter
+from bot.core.event_router import ChatMessageEvent, CommandContext, EventRouter
 
 
 class StubTokenStore:
@@ -283,6 +284,72 @@ async def test_twitchio3_message_uses_broadcaster_for_channel(settings) -> None:
     assert seen[0].channel_name == "otherchannel"
     assert seen[0].author_id == "99"
     assert replies == ["pong"]
+
+
+async def test_message_event_is_normalized_for_modules(settings) -> None:
+    router = EventRouter()
+    seen: list[ChatMessageEvent] = []
+
+    async def handler(event: ChatMessageEvent) -> None:
+        seen.append(event)
+
+    router.on_event("message", handler)
+    bot = make_bot(settings, router)
+
+    class User:
+        def __init__(self, user_id: str, name: str, display_name: str) -> None:
+            self.id = user_id
+            self.name = name
+            self.display_name = display_name
+
+    class Message:
+        text = "hello"
+        id = "msg-1"
+        timestamp = None
+        chatter = User("99", "chatter", "Chatter")
+        broadcaster = User("7", "channel", "Channel")
+
+    await bot.event_message(Message())
+
+    assert len(seen) == 1
+    event = seen[0]
+    assert event.author_id == "99"
+    assert event.author_login == "chatter"
+    assert event.author_name == "Chatter"
+    assert event.channel_id == "7"
+    assert event.channel_login == "channel"
+    assert event.channel_name == "Channel"
+    assert event.content == "hello"
+    assert event.message_id == "msg-1"
+    assert isinstance(event.raw, Message)
+
+
+async def test_message_timestamp_is_normalized_to_utc(settings) -> None:
+    router = EventRouter()
+    seen: list[ChatMessageEvent] = []
+
+    async def handler(event: ChatMessageEvent) -> None:
+        seen.append(event)
+
+    router.on_event("message", handler)
+    bot = make_bot(settings, router)
+
+    class User:
+        id = "99"
+        name = "chatter"
+        display_name = "Chatter"
+
+    class Message:
+        text = "hello"
+        timestamp = datetime(2026, 1, 1, 7, tzinfo=timezone(timedelta(hours=-5)))
+        chatter = User()
+
+    await bot.event_message(Message())
+
+    assert seen[0].sent_at is not None
+    assert seen[0].sent_at.utcoffset() == timedelta(0)
+    assert seen[0].sent_at.hour == 12
+    assert seen[0].sent_at.tzinfo is UTC
 
 
 async def test_bot_ignores_its_own_messages(settings) -> None:

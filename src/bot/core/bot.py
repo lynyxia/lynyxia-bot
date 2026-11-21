@@ -24,8 +24,9 @@ from twitchio.eventsub import ChatMessageSubscription
 from twitchio.ext import commands
 from twitchio.web import AiohttpAdapter
 
-from bot.core.event_router import CommandContext, EventRouter
+from bot.core.event_router import ChatMessageEvent, CommandContext, EventRouter
 from bot.database.repositories.oauth_token import OAuthTokenRepository
+from bot.utils.time import as_utc
 
 log = logging.getLogger(__name__)
 
@@ -213,20 +214,40 @@ class BotClient(commands.Bot):
         if getattr(message, "echo", False):
             return
 
-        await self.router.dispatch_event("message", message)
-
-        content = getattr(message, "text", None) or getattr(message, "content", "") or ""
-        if not content.startswith("!"):
-            return
-        parts = content[1:].split()
-        if not parts:
-            return
-
         # The broadcaster identifies which of the configured channels this
         # message came from.
         broadcaster = getattr(message, "broadcaster", None) or getattr(
             message, "channel", None
         )
+        content = getattr(message, "text", None) or getattr(message, "content", "") or ""
+
+        sent_at = as_utc(getattr(message, "timestamp", None))
+
+        event = ChatMessageEvent(
+            author_id=str(getattr(chatter, "id", "") or ""),
+            author_login=str(getattr(chatter, "name", "") or ""),
+            author_name=str(
+                getattr(chatter, "display_name", None) or getattr(chatter, "name", "") or ""
+            ),
+            channel_id=str(getattr(broadcaster, "id", "") or ""),
+            channel_login=str(getattr(broadcaster, "name", "") or ""),
+            channel_name=str(
+                getattr(broadcaster, "display_name", None)
+                or getattr(broadcaster, "name", "")
+                or ""
+            ),
+            content=content,
+            message_id=str(getattr(message, "id", "") or "") or None,
+            sent_at=sent_at,
+            raw=message,
+        )
+        await self.router.dispatch_event("message", event)
+
+        if not content.startswith("!"):
+            return
+        parts = content[1:].split()
+        if not parts:
+            return
 
         async def reply(text: str) -> None:
             responder = getattr(message, "respond", None)
@@ -239,18 +260,10 @@ class BotClient(commands.Bot):
         ctx = CommandContext(
             command=parts[0].lower(),
             args=parts[1:],
-            author_id=str(getattr(chatter, "id", "") or ""),
-            author_name=str(
-                getattr(chatter, "name", None)
-                or getattr(chatter, "display_name", "")
-                or ""
-            ),
-            channel_id=str(getattr(broadcaster, "id", "") or ""),
-            channel_name=str(
-                getattr(broadcaster, "name", None)
-                or getattr(broadcaster, "display_name", "")
-                or ""
-            ),
+            author_id=event.author_id,
+            author_name=event.author_name,
+            channel_id=event.channel_id,
+            channel_name=event.channel_name,
             content=content,
             reply=reply,
             raw=message,

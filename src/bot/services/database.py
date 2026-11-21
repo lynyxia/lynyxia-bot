@@ -32,11 +32,19 @@ class DatabaseService:
         """
         from sqlalchemy.ext.asyncio import AsyncEngine
 
+        # asyncpg interprets ``timestamptz`` in the session timezone; force UTC
+        # for every pooled connection so reads/writes never depend on the host.
+        connect_args = (
+            {"server_settings": {"timezone": "UTC"}}
+            if "asyncpg" in self.settings.dsn
+            else {}
+        )
         engine: AsyncEngine = create_async_engine(
             self.settings.dsn,
             pool_size=self.settings.pool_size,
             max_overflow=self.settings.max_overflow,
             pool_pre_ping=True,
+            connect_args=connect_args,
         )
 
         last_error: Exception | None = None

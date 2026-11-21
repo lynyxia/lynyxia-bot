@@ -1,11 +1,5 @@
-"""Chat logger module — foundation stub.
+"""Chat logger module: batched, non-blocking chat message persistence."""
 
-Persistence of chat messages will be implemented in a later milestone using
-``ChatMessageRepository`` and a batched, non-blocking writer.
-"""
+from bot.modules.chat_logger.module import ChatLoggerModule
 
-from bot.modules.base import Module
-
-
-class ChatLoggerModule(Module):
-    name = "chat_logger"
+__all__ = ["ChatLoggerModule"]

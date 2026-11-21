@@ -11,11 +11,13 @@ They are skipped otherwise so the default suite needs no running database.
 from __future__ import annotations
 
 import os
+from datetime import UTC, datetime, timedelta
 
 import pytest
 from pydantic import SecretStr
 
 from bot.config import DatabaseSettings
+from bot.core.event_router import ChatMessageEvent
 from bot.database.models import Base, Channel, User
 from bot.database.repositories import ChatMessageRepository, OAuthTokenRepository
 from bot.services.database import DatabaseService
@@ -55,10 +57,12 @@ async def test_repository_roundtrip() -> None:
 
         repository = ChatMessageRepository(database)
         message = await repository.add(
-            channel_id="7", user_id="42", content="hello world"
+            channel_id="7", user_id="42", username="chatter", content="hello world"
         )
         assert message.id is not None
         assert message.sent_at is not None
+        assert message.sent_at.tzinfo is not None
+        assert message.username == "chatter"
 
         await repository.add(channel_id="7", user_id="43", content="another quote")
 
@@ -69,6 +73,34 @@ async def test_repository_roundtrip() -> None:
         user_quote = await repository.get_random_by_user("7", "CHATTER")
         assert user_quote is not None
         assert user_quote.content == "hello world"
+
+        now = datetime.now(UTC)
+        events = [
+            ChatMessageEvent(
+                author_id="44",
+                author_login="batchuser",
+                author_name="Batch User",
+                channel_id="8",
+                channel_login="otherchannel",
+                channel_name="Other Channel",
+                content=f"batch {index}",
+                message_id=f"batch-{index}",
+                sent_at=now,
+            )
+            for index in range(3)
+        ]
+        events.append(events[0])  # redelivered event must be ignored
+        inserted = await repository.record_batch(events)
+        assert inserted == 3
+        batch_message = await repository.get_random("8")
+        assert batch_message is not None
+        assert batch_message.username == "batchuser"
+        assert batch_message.sent_at is not None
+        assert batch_message.sent_at.utcoffset() == timedelta(0)
+
+        deleted = await repository.delete_before(now + timedelta(days=1), "8")
+        assert deleted == 3
+        assert await repository.get_random("8") is None
 
         tokens = OAuthTokenRepository(database)
         assert await tokens.get("42") is None

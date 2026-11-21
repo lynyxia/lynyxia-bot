@@ -27,6 +27,7 @@ class ChatMessage(Base):
     twitch_message_id: Mapped[str | None] = mapped_column(
         String(64), nullable=True, unique=True, index=True
     )
+    username: Mapped[str] = mapped_column(String(64), nullable=False, server_default="")
     content: Mapped[str] = mapped_column(Text, nullable=False)
     sent_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now(), index=True
