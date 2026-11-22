@@ -136,7 +136,28 @@ async def test_banned_phrase_replaces_message_and_logs(caplog) -> None:
     await queue.stop()
 
     assert sent == [replacement]
-    assert f"banned phrase detected in: {original}" in caplog.text
+    assert f"blocklisted phrase detected in: {original}" in caplog.text
+
+
+async def test_blocklist_matches_whole_words_only() -> None:
+    queue = ChatSendQueue(
+        min_interval_seconds=0,
+        banned_phrases=["con"],
+        banned_phrase_replacement="[filtered]",
+    )
+    sent: list[str] = []
+
+    async def job(content: str) -> None:
+        sent.append(content)
+
+    await queue.start()
+    assert await queue.submit(job, "console", "7")
+    assert await queue.submit(job, "CON", "7")
+    assert await queue.submit(job, "scon", "7")
+    assert await queue.submit(job, "a con artist", "7")
+    await queue.stop()
+
+    assert sent == ["console", "[filtered]", "scon", "[filtered]"]
 
 
 async def test_banned_phrase_check_is_case_insensitive_and_clean_phrases(caplog) -> None:
@@ -156,4 +177,4 @@ async def test_banned_phrase_check_is_case_insensitive_and_clean_phrases(caplog)
     await queue.stop()
 
     assert sent == ["[filtered]", "this is fine"]
-    assert caplog.text.count("banned phrase detected in:") == 1
+    assert caplog.text.count("blocklisted phrase detected in:") == 1

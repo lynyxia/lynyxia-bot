@@ -75,7 +75,10 @@ def test_oauth_scopes_accept_single_string() -> None:
 
 def test_banned_phrase_config(settings) -> None:
     assert settings.chat.banned_phrases == []
-    assert "KKona" in settings.chat.banned_phrase_replacement
+    assert (
+        settings.chat.banned_phrase_replacement
+        == "[System] Blocklisted phrase detected in reply... Aborting."
+    )
 
     configured = Settings(
         twitch=settings.twitch,

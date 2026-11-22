@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass
 from typing import Protocol
@@ -54,8 +55,12 @@ class ChatSendQueue:
         if min_interval_seconds < 0:
             raise ValueError("min_interval_seconds must be non-negative")
         self._min_interval = min_interval_seconds
-        self._banned_phrases = tuple(
-            phrase.strip().lower() for phrase in banned_phrases if phrase.strip()
+        self._banned_patterns = tuple(
+            re.compile(
+                rf"(?<!\w){re.escape(phrase.strip())}(?!\w)", re.IGNORECASE
+            )
+            for phrase in banned_phrases
+            if phrase.strip()
         )
         self._replacement = banned_phrase_replacement
         self._queue: asyncio.Queue[_SendJob] = asyncio.Queue(maxsize=queue_maxsize)
@@ -79,8 +84,7 @@ class ChatSendQueue:
             self._worker = None
 
     def _filter(self, content: str) -> str:
-        lowered = content.lower()
-        if any(phrase in lowered for phrase in self._banned_phrases):
+        if any(pattern.search(content) for pattern in self._banned_patterns):
             log.warning("blocklisted phrase detected in: %s", content)
             return self._replacement
         return content

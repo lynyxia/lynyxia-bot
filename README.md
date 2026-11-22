@@ -212,7 +212,7 @@ All variables are read in `src/bot/config.py`. Nested settings use `__`.
 | `BOT_CHAT__MIN_INTERVAL_SECONDS` | Minimum gap between outgoing chat messages (default `1.5`) |
 | `BOT_CHAT__QUEUE_MAXSIZE` | Bounded outbound send queue size |
 | `BOT_CHAT__MAX_RETRIES`, `BOT_CHAT__BACKOFF_BASE_SECONDS` | 429 retry/backoff settings |
-| `BOT_CHAT__BANNED_PHRASES` | JSON array of case-insensitive phrases to filter |
+| `BOT_CHAT__BANNED_PHRASES` | JSON array of case-insensitive whole-word phrases to filter |
 | `BOT_CHAT__BANNED_PHRASE_REPLACEMENT` | Text sent instead of a message containing a banned phrase |
 | `BOT_ENABLED_MODULES` | JSON list of module names to load |
 | `BOT_ADMIN_USER_IDS` | JSON list of admin Twitch user IDs |
@@ -257,10 +257,11 @@ retried with `Retry-After` when available and exponential backoff otherwise;
 the queue is bounded, so bursts are dropped and counted rather than creating
 unbounded tasks.
 
-Every message is also checked against `BOT_CHAT__BANNED_PHRASES` (case-insensitive
-substrings) before it is queued. A match replaces the message with
+Every message is also checked against `BOT_CHAT__BANNED_PHRASES` before it is
+queued. Matching is **case-insensitive and whole-word only**: `con` matches
+`con` or `CON`, but not `console` or `scon`. A match replaces the message with
 `BOT_CHAT__BANNED_PHRASE_REPLACEMENT` and logs
-`banned phrase detected in: <original message>` to the console.
+`blocklisted phrase detected in: <original message>` to the console.
 
 ### Quotes settings
 
