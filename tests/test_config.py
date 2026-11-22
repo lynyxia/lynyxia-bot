@@ -109,4 +109,4 @@ def test_default_channel_scopes(settings) -> None:
 
 
 def test_defaults_include_all_foundations_modules(settings) -> None:
-    assert settings.enabled_modules == ["chat_logger", "quotes", "ai_chat"]
+    assert settings.enabled_modules == ["chat_logger", "quotes", "ecount", "ai_chat"]

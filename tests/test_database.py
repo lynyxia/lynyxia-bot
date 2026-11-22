@@ -93,6 +93,38 @@ async def test_repository_roundtrip() -> None:
         assert by_id.content == "hello world"
         assert await repository.get_random("7", ("42", "43")) is None
 
+        # Emote counting: whole-word, case-sensitive, channel- and time-scoped,
+        # with command invocations excluded.
+        pattern = r"(?<![a-zA-Z0-9_.])Kappa(?![a-zA-Z0-9_.])"
+        exclude_pattern = r"!ecount\s+Kappa"
+        recent = datetime.now(UTC)
+        for content, sent_at in (
+            ("Kappa Kappa", recent),  # one message counts once, not twice
+            ("!ecount Kappa", recent),  # command invocation excluded
+            ("KappaLUL", recent),  # no word boundary
+            ("kappa", recent),  # case-sensitive
+            ("Kappa", recent - timedelta(days=800)),  # outside the window
+        ):
+            await repository.add(
+                channel_id="7",
+                user_id="42",
+                username="chatter",
+                content=content,
+                sent_at=sent_at,
+            )
+        assert (
+            await repository.count_emote(
+                "7", pattern, exclude_pattern, recent - timedelta(days=365)
+            )
+            == 1
+        )
+        assert (
+            await repository.count_emote(
+                "8", pattern, exclude_pattern, recent - timedelta(days=365)
+            )
+            == 0
+        )
+
         now = datetime.now(UTC)
         events = [
             ChatMessageEvent(

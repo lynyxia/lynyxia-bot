@@ -29,6 +29,7 @@ def test_discovery_finds_foundation_modules(settings) -> None:
     assert set(make_manager(settings).discover()) == {
         "chat_logger",
         "quotes",
+        "ecount",
         "ai_chat",
     }
 

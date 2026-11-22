@@ -30,7 +30,7 @@ def settings() -> Settings:
             name="test_twitch_bot",
             connect_retries=1,
         ),
-        enabled_modules=["chat_logger", "quotes", "ai_chat"],
+        enabled_modules=["chat_logger", "quotes", "ecount", "ai_chat"],
         admin_user_ids=["42"],
     )
 

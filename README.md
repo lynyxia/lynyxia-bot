@@ -1,14 +1,9 @@
 # Modular Twitch Chatbot
 
 A Python 3.12+ framework for building Twitch chatbots out of small, independent
-modules. This repository currently contains the **foundation milestone**: core
-lifecycle, module discovery, configuration, event routing, PostgreSQL/Alembic
-infrastructure, Docker deployment and tests.
-
-The three initial feature modules (`ai_chat`, `quotes`, `chat_logger`) are
-**architecture stubs only** — their command and persistence behaviour arrives
-in later milestones. The database schema and repository interfaces they will
-use already exist.
+modules. The core provides lifecycle management, module discovery, configuration,
+event routing, PostgreSQL/Alembic persistence and Docker deployment; the feature
+modules are `chat_logger`, `quotes`, `ecount` and `ai_chat`.
 
 ---
 
@@ -28,6 +23,7 @@ src/bot/
 │   ├── base.py              # Module / ModuleContext contract
 │   ├── ai_chat/             # personas, allowlist, LLM + tools
 │   ├── chat_logger/         # batched chat message persistence
+│   ├── ecount/              # !ecount emote usage counts
 │   ├── quotes/              # !rq commands
 │   └── <feature>/           # one Module subclass per package
 ├── services/
@@ -223,8 +219,9 @@ All variables are read in `src/bot/config.py`. Nested settings use `__`.
 Example module configuration:
 
 ```bash
-BOT_MODULE__AI_CHAT='{"system_prompt":"You are helpful.","cooldown_seconds":5}'
+BOT_MODULE__AI_CHAT='{"default_persona":"generic.md","cooldown_seconds":5}'
 BOT_MODULE__CHAT_LOGGER='{"batch_size":100,"flush_interval_seconds":2,"queue_maxsize":2000,"retention_days":30}'
+BOT_MODULE__ECOUNT='{"default_days":365,"max_days":3650}'
 ```
 
 Modules read it via `self.context.config` and validate it with their own
@@ -305,6 +302,36 @@ Tools are enabled with the `tools` config array:
 Requests, model reasoning (when the endpoint provides it), tool calls/results
 and final responses are written to `logs/ai.log` via a rotating logger. Docker
 mounts a `logs` volume at `/app/logs`. API keys are never logged.
+
+### Emote counter settings
+
+`!ecount <emote> [timeframe]` reports how many **messages** in the current
+channel contained that emote. For example:
+
+```
+!ecount Kappa
+!ecount waga 6m
+!ecount PogChamp 2w
+```
+
+| Key | Default | Purpose |
+| --- | --- | --- |
+| `default_days` | `365` | Window used when no timeframe is given |
+| `max_days` | `3650` | Hard cap on any requested timeframe |
+
+Timeframes use the legacy `<number><y|w|d|m>` syntax (`y` = 365 days,
+`m` = 30 days, `w` = 7 days, `d` = 1 day). Unparseable values fall back to
+`default_days`, and oversized ones are clamped to `max_days`.
+
+Matching is case-sensitive and uses the legacy whole-word boundary set
+`[a-zA-Z0-9_.]`, so `KappaLUL` does not count as `Kappa`. Emote names are
+restricted to `[A-Za-z0-9_.]` (up to 64 characters); both the matching regex and
+the `!ecount <emote>` exclusion regex are passed to PostgreSQL as bound
+parameters. A message containing the emote multiple times counts once, and
+`!ecount <emote>` command invocations are excluded so the command cannot inflate
+its own result. No schema migration is needed — the count is computed on demand
+from `chat_messages`. Replies are threaded and pass through the shared send
+queue and blocklist.
 
 ### Quotes settings
 
@@ -486,7 +513,7 @@ class GreeterModule(Module):
 Then add it to configuration and restart:
 
 ```bash
-BOT_ENABLED_MODULES='["chat_logger","quotes","ai_chat","greeter"]'
+BOT_ENABLED_MODULES='["chat_logger","quotes","ecount","ai_chat","greeter"]'
 ```
 
 `settings.enabled_modules` determines what loads; discovery itself is
@@ -499,7 +526,7 @@ Inside a module, `self.context.services` provides:
 - `database` — `DatabaseService`; use `async with self.context.services.database.session() as session:` or an injected repository.
 - `twitch` — `await services.twitch.send_message(channel_id, text)` (sends to a specific channel by numeric ID).
 - `permissions` — `services.permissions.is_admin(ctx.author_id)` for admin commands.
-- `llm` — currently `None`; an `LLMProvider` implementation will be wired in with the AI module.
+- `llm` — an `LLMProvider` (the OpenAI-compatible adapter) used by the AI chat module.
 
 Always inject a repository instead of creating your own engine, and never
 perform blocking I/O on the event loop.
@@ -551,10 +578,15 @@ supported in this milestone.
 - OpenAI-compatible adapter, tool calling, threaded context and `ai.log`
 - Web search and chat-message tools, enabled via config
 
+**Milestone 6 — emote counter (done)**
+
+- `!ecount <emote> [timeframe]` with legacy `<number>y|w|d|m` timeframes
+- Per-channel, case-sensitive whole-word counts from `chat_messages`, with
+  command invocations excluded and bounded by a configurable lookback window
+
 **Explicitly deferred to later milestones**
 
 - Retention cleanup scheduling (repository method exists)
-- LLM provider dependency and concrete adapter
 - Hot-reloading
 
 If you want a different command-dispatch strategy (native TwitchIO commands)

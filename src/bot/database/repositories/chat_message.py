@@ -207,3 +207,30 @@ class ChatMessageRepository(BaseRepository):
         async with self.database.session() as session:
             result = await session.execute(stmt)
             return result.scalar_one_or_none()
+
+    async def count_emote(
+        self,
+        channel_id: str,
+        pattern: str,
+        exclude_pattern: str,
+        since: datetime,
+    ) -> int:
+        """Count messages in ``channel_id`` matching ``pattern`` since ``since``.
+
+        ``exclude_pattern`` removes command invocations (e.g. ``!ecount Kappa``)
+        so asking for a count does not inflate it. Both patterns are supplied by
+        the caller and passed to PostgreSQL as bound parameters.
+        """
+        stmt = (
+            select(func.count())
+            .select_from(ChatMessage)
+            .where(
+                ChatMessage.channel_id == channel_id,
+                ChatMessage.sent_at >= since,
+                ChatMessage.content.op("~")(pattern),
+                ChatMessage.content.op("!~")(exclude_pattern),
+            )
+        )
+        async with self.database.session() as session:
+            result = await session.execute(stmt)
+            return int(result.scalar_one())

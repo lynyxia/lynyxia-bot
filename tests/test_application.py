@@ -8,7 +8,7 @@ async def test_application_lifecycle(settings, fake_database, fake_bot) -> None:
 
     await app.start()
     assert fake_database.connected
-    assert set(app.modules.modules) == {"chat_logger", "quotes", "ai_chat"}
+    assert set(app.modules.modules) == {"chat_logger", "quotes", "ecount", "ai_chat"}
     assert fake_bot.router is app.router
     assert app.twitch._client is fake_bot
 
