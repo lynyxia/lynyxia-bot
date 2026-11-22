@@ -81,9 +81,14 @@ class Subscription:
 
 
 class EventRouter:
-    def __init__(self) -> None:
+    def __init__(
+        self, command_gate: Callable[[CommandContext], Awaitable[bool]] | None = None
+    ) -> None:
         self._events: dict[str, list[Handler]] = defaultdict(list)
         self._commands: dict[str, list[Handler]] = defaultdict(list)
+        # Optional gate consulted before any command handler runs. Used for the
+        # per-channel "live mode" restriction; fails open if it raises.
+        self.command_gate = command_gate
 
     def on_event(self, event: str, handler: Handler) -> Subscription:
         """Register ``handler`` for a named event (e.g. ``"message"``)."""
@@ -120,6 +125,13 @@ class EventRouter:
                 log.exception("Event handler failed for event=%s", event)
 
     async def dispatch_command(self, ctx: CommandContext) -> None:
+        if self.command_gate is not None:
+            try:
+                if not await self.command_gate(ctx):
+                    return
+            except Exception:
+                # A broken gate must not silence the bot.
+                log.exception("Command gate failed for !%s; allowing command", ctx.command)
         for handler in list(self._commands.get(ctx.command.lower(), ())):
             try:
                 await handler(ctx)

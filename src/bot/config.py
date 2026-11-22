@@ -137,6 +137,22 @@ class ChatSettings(BaseModel):
         return sorted(phrases)
 
 
+class LiveSettings(BaseModel):
+    """Per-channel live-mode restriction settings."""
+
+    enabled: bool = True
+    # Commands that work even while the streamer is live, so owners and admins
+    # can always manage the bot (e.g. restore output or edit the pass list).
+    exempt_commands: list[str] = Field(
+        default_factory=lambda: ["chatset", "livepass", "lynyxia"]
+    )
+
+    @field_validator("exempt_commands", mode="before")
+    @classmethod
+    def _as_list(cls, value: object) -> object:
+        return [value] if isinstance(value, str) else value
+
+
 class LoggingSettings(BaseModel):
     level: str = "INFO"
 
@@ -155,6 +171,7 @@ class Settings(BaseSettings):
     llm: LLMSettings = Field(default_factory=LLMSettings)
     logging: LoggingSettings = Field(default_factory=LoggingSettings)
     chat: ChatSettings = Field(default_factory=ChatSettings)
+    live: LiveSettings = Field(default_factory=LiveSettings)
     enabled_modules: list[str] = Field(
         default_factory=lambda: [
             "chat_logger",
@@ -163,6 +180,7 @@ class Settings(BaseSettings):
             "lines",
             "ai_chat",
             "lynyxia",
+            "livepass",
         ]
     )
     admin_user_ids: list[str] = Field(default_factory=list)

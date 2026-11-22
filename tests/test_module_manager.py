@@ -33,6 +33,7 @@ def test_discovery_finds_foundation_modules(settings) -> None:
         "lines",
         "ai_chat",
         "lynyxia",
+        "livepass",
     }
 
 

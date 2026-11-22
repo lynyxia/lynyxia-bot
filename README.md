@@ -3,7 +3,8 @@
 A Python 3.12+ framework for building Twitch chatbots out of small, independent
 modules. The core provides lifecycle management, module discovery, configuration,
 event routing, PostgreSQL/Alembic persistence and Docker deployment; the feature
-modules are `chat_logger`, `quotes`, `ecount`, `lines`, `ai_chat` and `lynyxia`.
+modules are `chat_logger`, `quotes`, `ecount`, `lines`, `ai_chat`, `lynyxia` and
+`livepass`.
 
 ---
 
@@ -25,11 +26,14 @@ src/bot/
 │   ├── chat_logger/         # batched chat message persistence
 │   ├── ecount/              # !ecount emote usage counts
 │   ├── lines/               # !lines per-user message counts
+│   ├── livepass/            # !livepass per-channel live allowlist
 │   ├── lynxia/              # !lynyxia per-channel output toggle
 │   ├── quotes/              # !rq commands
 │   └── <feature>/           # one Module subclass per package
 ├── services/
 │   ├── database.py          # engine, session factory, pooling, retry
+│   ├── live_gate.py         # per-channel live-mode command gate
+│   ├── live_status.py       # cached stream state (EventSub + Helix hydration)
 │   ├── output_gate.py       # cached per-channel "may we send?" state
 │   ├── twitch.py            # thin client wrapper
 │   ├── llm.py               # LLM provider interface
@@ -283,6 +287,34 @@ The state is stored per channel in PostgreSQL (`channel_states`) and survives
 restarts; channels without a stored row are enabled by default. Unauthorized
 users are ignored silently.
 
+### Live-mode command gating
+
+While a channel's streamer is **offline**, everyone may use the bot normally.
+While the streamer is **live**, only users on that channel's live pass list may
+run bot commands — this prevents random viewers from flooding chat with
+commands during a stream. Messages are logged in both states: the gate sits at
+command dispatch in `EventRouter`, after the `"message"` event has already been
+sent to the chat logger, so no chat message is ever skipped.
+
+| Command | Permission | Purpose |
+| --- | --- | --- |
+| `!livepass add <username\|id>` | bot admin / channel owner | Allow a user while the stream is live |
+| `!livepass list` | bot admin / channel owner | Show the channel's live pass list |
+| `!livepass remove <username\|id>` | bot admin / channel owner | Remove a user from the list |
+
+Names are resolved to stable Twitch user IDs the same way as the AI chat
+allowlist. The channel owner and bot admins (`BOT_ADMIN_USER_IDS`) are always
+allowed while live, and `!livepass`, `!lynyxia` and `!chatset` are exempt from
+the gate so the bot can still be managed. `BOT_LIVE__ENABLED=false` turns the
+feature off globally; `BOT_LIVE__EXEMPT_COMMANDS` overrides the exempt list.
+
+Live state is tracked per channel via EventSub `stream.online` /
+`stream.offline` subscriptions and cached in memory. Because EventSub only
+reports transitions, current state is hydrated from Helix at startup; API
+failures fail open (channels are treated as offline), so a Twitch outage never
+locks users out. Pass lists are stored in PostgreSQL (`live_passes`) and
+survive restarts. Blocked users are ignored silently.
+
 ### AI chat settings
 
 The AI chat module is configured through `BOT_MODULE__AI_CHAT` (see
@@ -463,7 +495,8 @@ adds `oauth_tokens` for the bot-managed token pair; revision `0003` adds the
 chatter's `username` to each logged message; revision `0004` adds
 `channel_authorizations` for per-channel broadcaster grants; revision `0005`
 adds the AI chat settings, allowlist and thread tables; revision `0006` adds
-`channel_states` for the per-channel output toggle.
+`channel_states` for the per-channel output toggle; revision `0007` adds
+`live_passes` for the per-channel live allowlist.
 
 ### Importing legacy SQLite logs
 
@@ -645,6 +678,12 @@ supported in this milestone.
 
 - `!lynyxia disable|enable` for admins/channel owners, persisted in PostgreSQL
 - Send-layer gate that silences all chat output while logging continues
+
+**Milestone 9 — live-mode command gating (done)**
+
+- EventSub stream status with startup Helix hydration, cached per channel
+- `!livepass add|list|remove` allowlist; commands gated while the stream is live
+- All chat messages are still logged, live or offline
 
 **Explicitly deferred to later milestones**
 

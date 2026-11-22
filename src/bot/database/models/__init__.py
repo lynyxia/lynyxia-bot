@@ -5,6 +5,7 @@ from bot.database.models.base import Base
 from bot.database.models.channel_authorization import ChannelAuthorization
 from bot.database.models.channel_state import ChannelState
 from bot.database.models.chat_message import ChatMessage
+from bot.database.models.live_pass import LivePass
 from bot.database.models.oauth_token import OAuthToken
 from bot.database.models.twitch import Channel, User
 
@@ -17,6 +18,7 @@ __all__ = [
     "ChannelAuthorization",
     "ChannelState",
     "ChatMessage",
+    "LivePass",
     "OAuthToken",
     "User",
 ]

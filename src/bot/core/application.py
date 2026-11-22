@@ -19,8 +19,11 @@ from bot.core.event_router import EventRouter
 from bot.core.module_manager import ModuleManager
 from bot.core.permissions import PermissionService
 from bot.database.repositories.channel_state import ChannelStateRepository
+from bot.database.repositories.live_pass import LivePassRepository
 from bot.services import Services
 from bot.services.database import DatabaseService
+from bot.services.live_gate import LiveGate
+from bot.services.live_status import LiveStatusService
 from bot.services.output_gate import ChannelOutputGate
 from bot.services.twitch import TwitchService
 from bot.utils.logging import configure_logging
@@ -40,7 +43,6 @@ class Application:
     ) -> None:
         configure_logging(settings.logging.level)
         self.settings = settings
-        self.router = EventRouter()
         self.database = database if database is not None else DatabaseService(settings.database)
         self.chat_queue = ChatSendQueue(
             min_interval_seconds=settings.chat.min_interval_seconds,
@@ -54,12 +56,27 @@ class Application:
         self.permissions = PermissionService(settings.admin_user_ids)
         self.llm = self._create_llm_provider()
         self.output_gate = ChannelOutputGate(ChannelStateRepository(self.database))
+
+        self.live_status = LiveStatusService()
+        self.live_gate = LiveGate(
+            LivePassRepository(self.database),
+            self.permissions,
+            enabled=settings.live.enabled,
+            exempt_commands=settings.live.exempt_commands,
+            status=self.live_status,
+        )
+        # The router consults the gate before dispatching any command. Messages
+        # are dispatched to the "message" event separately and are always logged.
+        self.router = EventRouter(command_gate=self.live_gate.is_allowed)
+
         self.services = Services(
             database=self.database,
             twitch=self.twitch,
             llm=self.llm,
             permissions=self.permissions,
             output_gate=self.output_gate,
+            live_gate=self.live_gate,
+            live_status=self.live_status,
         )
         self.modules = ModuleManager(settings, self.router, self.services)
 
@@ -107,6 +124,7 @@ class Application:
             channel_token_store=ChannelAuthorizationRepository(self.database),
             chat_sender=self.chat_queue,
             output_gate=self.output_gate,
+            live_status=self.live_status,
             adapter=adapter,
             prefix="!",
         )

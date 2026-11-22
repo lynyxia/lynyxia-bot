@@ -22,7 +22,11 @@ from urllib.parse import urlencode
 
 from aiohttp import web
 from twitchio import Scopes
-from twitchio.eventsub import ChatMessageSubscription
+from twitchio.eventsub import (
+    ChatMessageSubscription,
+    StreamOfflineSubscription,
+    StreamOnlineSubscription,
+)
 from twitchio.ext import commands
 from twitchio.web import AiohttpAdapter
 
@@ -77,6 +81,7 @@ class BotClient(commands.Bot):
         channel_token_store: ChannelAuthorizationRepository,
         chat_sender: ChatSender | None = None,
         output_gate: Any | None = None,
+        live_status: Any | None = None,
         **kwargs: Any,
     ) -> None:
         self._client_id = client_id
@@ -98,10 +103,12 @@ class BotClient(commands.Bot):
         self._channel_token_store = channel_token_store
         self._chat_sender = chat_sender or DirectChatSender()
         self._output_gate = output_gate
+        self._live_status = live_status
         self._authorized_channels: set[str] = set()
         self._warned_channels: set[str] = set()
         self._fallback_warned_channels: set[str] = set()
         self._chat_subscribed = False
+        self._stream_subscribed = False
         self._subscribe_lock = asyncio.Lock()
 
     # ------------------------------------------------------------------
@@ -254,6 +261,8 @@ class BotClient(commands.Bot):
                 return
             await self._persist_token()
             await self._subscribe_chat()
+            await self._subscribe_stream_status()
+            await self._hydrate_live_status()
             log.info("Twitch authorization completed for bot user %s", self.bot_id)
             return
 
@@ -309,10 +318,56 @@ class BotClient(commands.Bot):
                 "Subscribed to %s channel(s): %s", len(self.channel_ids), self.channel_ids
             )
 
+    async def _subscribe_stream_status(self) -> None:
+        """Track live/offline transitions for every configured channel."""
+        if self._stream_subscribed or self._live_status is None:
+            return
+        async with self._subscribe_lock:
+            if self._stream_subscribed:
+                return
+            for channel_id in self.channel_ids:
+                for subscription in (
+                    StreamOnlineSubscription(broadcaster_user_id=channel_id),
+                    StreamOfflineSubscription(broadcaster_user_id=channel_id),
+                ):
+                    try:
+                        await self.subscribe_websocket(subscription)
+                    except Exception:
+                        log.error(
+                            "Failed to subscribe to stream status for channel %s",
+                            channel_id,
+                        )
+                        return
+            self._stream_subscribed = True
+            log.info(
+                "Subscribed to stream status for %s channel(s)", len(self.channel_ids)
+            )
+
+    async def _hydrate_live_status(self) -> None:
+        """Fetch the current stream state; EventSub only reports transitions."""
+        if self._live_status is not None:
+            await self._live_status.hydrate(self.http, self.channel_ids)
+
+    async def event_stream_online(self, payload: Any) -> None:
+        if self._live_status is None:
+            return
+        channel_id = str(getattr(getattr(payload, "broadcaster", None), "id", "") or "")
+        if channel_id:
+            self._live_status.set_live(channel_id, True)
+
+    async def event_stream_offline(self, payload: Any) -> None:
+        if self._live_status is None:
+            return
+        channel_id = str(getattr(getattr(payload, "broadcaster", None), "id", "") or "")
+        if channel_id:
+            self._live_status.set_live(channel_id, False)
+
     async def setup_hook(self) -> None:
         """Subscribe if a token exists, otherwise request authorization."""
         if self.bot_id in self.tokens:
             await self._subscribe_chat()
+            await self._subscribe_stream_status()
+            await self._hydrate_live_status()
         else:
             log.warning(
                 "Twitch authorization required. Open this URL once and log in as "

@@ -17,3 +17,5 @@ class Services:
     llm: Any = None
     permissions: Any = None
     output_gate: Any = None
+    live_gate: Any = None
+    live_status: Any = None

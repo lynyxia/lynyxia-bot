@@ -7,6 +7,7 @@ from unittest.mock import AsyncMock
 
 from bot.core.bot import BotClient
 from bot.core.event_router import ChatMessageEvent, CommandContext, EventRouter
+from bot.services.live_status import LiveStatusService
 
 
 class StubTokenStore:
@@ -59,6 +60,7 @@ def make_bot(
     channel_store: StubChannelStore | None = None,
     chat_sender=None,
     output_gate=None,
+    live_status=None,
 ) -> BotClient:
     return BotClient(
         router=router or EventRouter(),
@@ -75,6 +77,7 @@ def make_bot(
         channel_token_store=channel_store or StubChannelStore(),
         chat_sender=chat_sender,
         output_gate=output_gate,
+        live_status=live_status,
         prefix="!",
     )
 
@@ -887,3 +890,58 @@ async def test_bot_ignores_its_own_messages(settings) -> None:
 
     await bot.event_message(Message())
     assert seen == []
+
+
+async def test_setup_hook_subscribes_to_stream_status_when_enabled(settings) -> None:
+    bot = make_bot(settings, live_status=LiveStatusService())
+    stored_token(bot)
+    bot.subscribe_websocket = AsyncMock()  # type: ignore[method-assign]
+    bot._hydrate_live_status = AsyncMock()  # type: ignore[method-assign]
+
+    await bot.setup_hook()
+
+    conditions = [call.args[0].condition for call in bot.subscribe_websocket.await_args_list]
+    assert conditions == [
+        {"broadcaster_user_id": "7", "user_id": "42"},
+        {"broadcaster_user_id": "7"},
+        {"broadcaster_user_id": "7"},
+    ]
+    bot._hydrate_live_status.assert_awaited_once()
+
+
+async def test_stream_events_update_live_status(settings) -> None:
+    status = LiveStatusService()
+    bot = make_bot(settings, live_status=status)
+    payload = SimpleNamespace(broadcaster=SimpleNamespace(id="7"))
+
+    await bot.event_stream_online(payload)
+    assert status.is_live("7") is True
+
+    await bot.event_stream_offline(payload)
+    assert status.is_live("7") is False
+
+
+async def test_command_gate_blocks_handler_but_message_is_still_logged(settings) -> None:
+    router = EventRouter(command_gate=lambda _ctx: _async_false())
+    logged: list[ChatMessageEvent] = []
+    called: list[str] = []
+
+    async def on_message(event: ChatMessageEvent) -> None:
+        logged.append(event)
+
+    async def handler(_ctx: CommandContext) -> None:
+        called.append("called")
+
+    router.on_event("message", on_message)
+    router.on_command("ping", handler)
+    bot = make_bot(settings, router)
+
+    await bot.event_message(_SimpleMessage())
+
+    assert len(logged) == 1
+    assert logged[0].content == "!ping"
+    assert called == []
+
+
+async def _async_false() -> bool:
+    return False

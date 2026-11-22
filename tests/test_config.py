@@ -1,7 +1,7 @@
 import pytest
 from pydantic import SecretStr, ValidationError
 
-from bot.config import DatabaseSettings, Settings, TwitchSettings
+from bot.config import DatabaseSettings, LiveSettings, Settings, TwitchSettings
 
 
 def test_secrets_are_redacted(settings) -> None:
@@ -116,4 +116,12 @@ def test_defaults_include_all_foundations_modules(settings) -> None:
         "lines",
         "ai_chat",
         "lynyxia",
+        "livepass",
     ]
+
+
+def test_live_gate_defaults_and_list_normalization() -> None:
+    live = LiveSettings()
+    assert live.enabled is True
+    assert set(live.exempt_commands) == {"chatset", "livepass", "lynyxia"}
+    assert LiveSettings(exempt_commands="livepass").exempt_commands == ["livepass"]
