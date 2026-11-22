@@ -24,7 +24,11 @@ services:
         max-file: "3"
 
   bot:
-    build: .
+    build:
+      context: .
+      args:
+        BOT_UID: ${BOT_UID:-1000}
+        BOT_GID: ${BOT_GID:-1000}
     restart: unless-stopped
     env_file: .env
     environment:
@@ -33,6 +37,11 @@ services:
       BOT_DATABASE__USER: ${POSTGRES_USER:-bot}
       BOT_DATABASE__PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
       BOT_DATABASE__NAME: ${POSTGRES_DB:-twitch_bot}
+    volumes:
+      # Personas can be added/removed from the host without rebuilding.
+      - ./personas:/app/personas:ro
+      # AI request/reasoning/response logs are visible on the host.
+      - ./logs:/app/logs
     depends_on:
       db:
         condition: service_healthy

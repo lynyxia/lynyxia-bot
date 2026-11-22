@@ -16,3 +16,10 @@ class PermissionService:
 
     def is_admin_context(self, ctx: CommandContext) -> bool:
         return self.is_admin(ctx.author_id)
+
+    def is_channel_owner(self, ctx: CommandContext) -> bool:
+        """The broadcaster's user ID is the channel ID in our events."""
+        return bool(ctx.channel_id) and ctx.author_id == ctx.channel_id
+
+    def can_manage_channel(self, ctx: CommandContext) -> bool:
+        return self.is_admin_context(ctx) or self.is_channel_owner(ctx)

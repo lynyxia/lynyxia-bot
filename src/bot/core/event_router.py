@@ -31,8 +31,10 @@ class CommandContext:
     channel_name: str
     content: str
     reply: Callable[[str], Awaitable[None]]
+    author_login: str | None = None
     raw: Any = field(default=None, repr=False)
     reply_threaded: Callable[[str], Awaitable[None]] | None = None
+    thread_id: str | None = None
 
     def __post_init__(self) -> None:
         # Handlers that don't need threading can use the plain reply.

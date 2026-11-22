@@ -15,6 +15,10 @@ dependencies = [
     "alembic>=1.13,<2",
     "pydantic>=2.6,<3",
     "pydantic-settings>=2.2,<3",
+    # OpenAI SDK works with any OpenAI-compatible endpoint via base_url.
+    "openai>=1.40,<3",
+    # Used for the SearXNG JSON API.
+    "httpx>=0.27,<1",
 ]
 
 [project.optional-dependencies]

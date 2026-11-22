@@ -26,13 +26,15 @@ src/bot/
 │   └── permissions.py       # admin checks
 ├── modules/
 │   ├── base.py              # Module / ModuleContext contract
+│   ├── ai_chat/             # personas, allowlist, LLM + tools
 │   ├── chat_logger/         # batched chat message persistence
 │   ├── quotes/              # !rq commands
 │   └── <feature>/           # one Module subclass per package
 ├── services/
 │   ├── database.py          # engine, session factory, pooling, retry
 │   ├── twitch.py            # thin client wrapper
-│   └── llm.py               # LLM provider *interface* only
+│   ├── llm.py               # LLM provider interface
+│   └── llm_openai.py        # OpenAI-compatible adapter (custom base_url)
 ├── database/
 │   ├── models/              # SQLAlchemy 2.x ORM models
 │   ├── repositories/        # all data access
@@ -263,6 +265,47 @@ queued. Matching is **case-insensitive and whole-word only**: `con` matches
 `BOT_CHAT__BANNED_PHRASE_REPLACEMENT` and logs
 `blocklisted phrase detected in: <original message>` to the console.
 
+### AI chat settings
+
+The AI chat module is configured through `BOT_MODULE__AI_CHAT` (see
+`.env.example`). Personas are plain `*.md` files in `./personas`, mounted
+read-only into the container; add or remove files there and restart the bot.
+Only simple filenames are accepted — no subdirectories or path traversal.
+
+| Command | Permission | Purpose |
+| --- | --- | --- |
+| `!chatset prompt <persona>.md` | bot owner / channel owner | Select the channel's system prompt |
+| `!chatset allow <username\|id>` | bot owner / channel owner | Add someone to the channel allowlist |
+| `!chatset list` | bot owner / channel owner | List the allowlist |
+| `!chatset remove <username\|id>` | bot owner / channel owner | Remove someone |
+| `!chat [question]` | allowlisted users | Ask the LLM; mention the bot with `@` also works |
+
+The channel owner is detected by comparing the sender's ID with `ctx.channel_id`;
+bot owners come from `BOT_ADMIN_USER_IDS`.
+
+Persona files may use `{date}`, `{time}`, `{username}` and `{user_id}`
+placeholders. They are replaced before the system prompt is sent (`date` is
+`YYYY-MM-DD`, `time` is `HH:MM:SS` in UTC). The module also appends an explicit
+instruction naming the requester, so `@name` mentions of *other* users in the
+question are not mistaken for the sender. A leading `@botname` is stripped
+from the question itself.
+
+`!chat` and mentions start a fresh context. Replies in the same Twitch thread
+reuse stored context from `ai_chat_threads`. The history, tool rounds and
+response length are all capped by config, and per-user cooldowns limit abuse.
+All replies are threaded and pass through the shared send queue and blocklist.
+
+Tools are enabled with the `tools` config array:
+
+- `web_search` — queries a SearXNG JSON endpoint (`BOT_MODULE__AI_CHAT` →
+  `searxng_url`, timeout and max results).
+- `chat_messages` — reads recent messages for a mentioned user from
+  `chat_messages`, capped by `max_context_messages`.
+
+Requests, model reasoning (when the endpoint provides it), tool calls/results
+and final responses are written to `logs/ai.log` via a rotating logger. Docker
+mounts a `logs` volume at `/app/logs`. API keys are never logged.
+
 ### Quotes settings
 
 | Key | Default | Purpose |
@@ -307,6 +350,10 @@ docker compose logs -f bot
 - Credentials come only from `.env`; none are baked into the image.
 - Compose publishes the OAuth callback port (default `8080`) so you can
   complete the one-time authorization from your browser.
+- `./personas` is mounted read-only at `/app/personas`; `./logs` is bind-mounted
+  at `/app/logs`, so `ai.log` is visible on the host. The image's non-root user
+  uses UID/GID `1000` by default (override with `BOT_UID`/`BOT_GID` build args
+  if your host user differs).
 
 Stop everything (data volume is preserved):
 
@@ -336,7 +383,8 @@ revision `0001` creates `channels`, `users` and `chat_messages`, using Twitch
 IDs as stable identifiers and appropriate indexes/constraints. Revision `0002`
 adds `oauth_tokens` for the bot-managed token pair; revision `0003` adds the
 chatter's `username` to each logged message; revision `0004` adds
-`channel_authorizations` for per-channel broadcaster grants.
+`channel_authorizations` for per-channel broadcaster grants; revision `0005`
+adds the AI chat settings, allowlist and thread tables.
 
 ### Importing legacy SQLite logs
 
@@ -497,9 +545,14 @@ supported in this milestone.
 - Per-channel broadcaster OAuth so app-token sends keep the Chat Bot badge
 - Shared, rate-limited outbound chat queue with 429 backoff
 
+**Milestone 5 — AI chat (done)**
+
+- Persona markdown files, per-channel persona selection and allowlists
+- OpenAI-compatible adapter, tool calling, threaded context and `ai.log`
+- Web search and chat-message tools, enabled via config
+
 **Explicitly deferred to later milestones**
 
-- AI Chat (`!chat`, `!chatsettings` allowlist, LLM adapter, cooldowns)
 - Retention cleanup scheduling (repository method exists)
 - LLM provider dependency and concrete adapter
 - Hot-reloading

@@ -334,11 +334,13 @@ class BotClient(commands.Bot):
         )
         await self.router.dispatch_event("message", event)
 
-        if not content.startswith("!"):
-            return
-        parts = content[1:].split()
-        if not parts:
-            return
+        reply_info = getattr(message, "reply", None)
+        thread_id = (
+            str(getattr(reply_info, "thread_message_id", "") or "")
+            or str(getattr(reply_info, "parent_message_id", "") or "")
+            or str(getattr(message, "id", "") or "")
+            or None
+        )
 
         async def _send(text: str, *, reply_to_message_id: str | None = None) -> None:
             """Queue a send; prefer the app token, fall back to the user token."""
@@ -413,16 +415,43 @@ class BotClient(commands.Bot):
             message_id = getattr(message, "id", None)
             await _send(text, reply_to_message_id=message_id)
 
+        mentions = getattr(message, "mentions", None) or ()
+        if any(str(getattr(item, "id", "") or "") == self.bot_id for item in mentions):
+            mention_ctx = CommandContext(
+                command="chat",
+                args=content.split(),
+                author_id=event.author_id,
+                author_name=event.author_name,
+                author_login=event.author_login,
+                channel_id=event.channel_id,
+                channel_name=event.channel_name,
+                content=content,
+                reply=reply,
+                raw=message,
+                reply_threaded=reply_threaded,
+                thread_id=thread_id,
+            )
+            await self.router.dispatch_command(mention_ctx)
+            return
+
+        if not content.startswith("!"):
+            return
+        parts = content[1:].split()
+        if not parts:
+            return
+
         ctx = CommandContext(
             command=parts[0].lower(),
             args=parts[1:],
             author_id=event.author_id,
             author_name=event.author_name,
+            author_login=event.author_login,
             channel_id=event.channel_id,
             channel_name=event.channel_name,
             content=content,
             reply=reply,
             raw=message,
             reply_threaded=reply_threaded,
+            thread_id=thread_id,
         )
         await self.router.dispatch_command(ctx)

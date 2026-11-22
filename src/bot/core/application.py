@@ -50,16 +50,28 @@ class Application:
         )
         self.twitch = TwitchService()
         self.permissions = PermissionService(settings.admin_user_ids)
+        self.llm = self._create_llm_provider()
         self.services = Services(
             database=self.database,
             twitch=self.twitch,
-            llm=None,
+            llm=self.llm,
             permissions=self.permissions,
         )
         self.modules = ModuleManager(settings, self.router, self.services)
 
         self._bot = bot
         self._bot_task: asyncio.Task[None] | None = None
+
+    def _create_llm_provider(self) -> Any:
+        if self.settings.llm.provider != "openai":
+            log.warning(
+                "Unknown LLM provider %s; AI chat will be unavailable",
+                self.settings.llm.provider,
+            )
+            return None
+        from bot.services.llm_openai import OpenAILLMProvider
+
+        return OpenAILLMProvider(self.settings.llm)
 
     def _create_bot(self) -> Any:
         # Imported lazily so unit tests don't need a TwitchIO event loop.

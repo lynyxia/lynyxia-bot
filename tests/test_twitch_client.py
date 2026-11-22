@@ -2,6 +2,7 @@
 
 from collections.abc import Sequence
 from datetime import UTC, datetime, timedelta, timezone
+from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 from bot.core.bot import BotClient
@@ -454,6 +455,49 @@ async def test_replies_are_submitted_with_their_content(settings) -> None:
     await bot.event_message(Message())
 
     assert sender.calls == [("hello there", "7")]
+
+
+async def test_command_context_includes_author_login(settings) -> None:
+    router = EventRouter()
+    seen: list[str | None] = []
+
+    async def handler(ctx: CommandContext) -> None:
+        seen.append(ctx.author_login)
+
+    router.on_command("ping", handler)
+    bot = make_bot(settings, router)
+
+    message = SimpleNamespace(
+        text="!ping",
+        id="msg-1",
+        chatter=SimpleNamespace(id="99", name="chatter", display_name="Chatter"),
+        broadcaster=SimpleNamespace(id="7", name="channel", display_name="Channel"),
+    )
+    await bot.event_message(message)
+
+    assert seen == ["chatter"]
+
+
+async def test_mention_dispatches_chat_command(settings) -> None:
+    router = EventRouter()
+    seen: list[str] = []
+
+    async def handler(ctx: CommandContext) -> None:
+        seen.append(ctx.content)
+
+    router.on_command("chat", handler)
+    bot = make_bot(settings, router)
+
+    message = SimpleNamespace(
+        text="@testbot hello there",
+        id="msg-1",
+        chatter=SimpleNamespace(id="99", name="chatter", display_name="Chatter"),
+        broadcaster=SimpleNamespace(id="7", name="channel", display_name="Channel"),
+        mentions=[SimpleNamespace(id="42")],
+    )
+    await bot.event_message(message)
+
+    assert seen == ["@testbot hello there"]
 
 
 def test_channel_authorization_url_uses_channel_scopes(settings) -> None:

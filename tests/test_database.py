@@ -20,6 +20,9 @@ from bot.config import DatabaseSettings
 from bot.core.event_router import ChatMessageEvent
 from bot.database.models import Base, Channel, User
 from bot.database.repositories import (
+    AiChatAllowlistRepository,
+    AiChatChannelRepository,
+    AiChatThreadRepository,
     ChannelAuthorizationRepository,
     ChatMessageRepository,
     OAuthTokenRepository,
@@ -140,6 +143,27 @@ async def test_repository_roundtrip() -> None:
         assert len(await channels.list_all()) == 1
         await channels.delete("7")
         assert await channels.get("7") is None
+
+        ai_channels = AiChatChannelRepository(database)
+        assert await ai_channels.get("7") is None
+        await ai_channels.set_persona("7", "generic.md")
+        channel_settings = await ai_channels.get("7")
+        assert channel_settings is not None
+        assert channel_settings.persona == "generic.md"
+
+        allowlist = AiChatAllowlistRepository(database)
+        await allowlist.add("7", "42", "chatter")
+        assert await allowlist.contains("7", "42")
+        assert len(await allowlist.list("7")) == 1
+        assert await allowlist.remove("7", "42")
+
+        threads = AiChatThreadRepository(database)
+        await threads.save(
+            "thread-1", "7", "42", "generic.md", [{"role": "user", "content": "hi"}]
+        )
+        thread = await threads.get("thread-1")
+        assert thread is not None
+        assert thread.messages == [{"role": "user", "content": "hi"}]
     finally:
         async with database._engine.begin() as connection:
             await connection.run_sync(Base.metadata.drop_all)

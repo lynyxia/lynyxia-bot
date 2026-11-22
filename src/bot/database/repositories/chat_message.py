@@ -156,6 +156,23 @@ class ChatMessageRepository(BaseRepository):
             result = await session.execute(stmt)
             return result.scalar_one_or_none()
 
+    async def get_recent_by_user(
+        self, channel_id: str, user_id: str, limit: int
+    ) -> Sequence[ChatMessage]:
+        """Recent messages from one user in one channel, newest first."""
+        stmt = (
+            select(ChatMessage)
+            .where(
+                ChatMessage.channel_id == channel_id,
+                ChatMessage.user_id == user_id,
+            )
+            .order_by(ChatMessage.sent_at.desc())
+            .limit(limit)
+        )
+        async with self.database.session() as session:
+            result = await session.execute(stmt)
+            return result.scalars().all()
+
     async def get_random_by_user_id(
         self, channel_id: str, user_id: str
     ) -> ChatMessage | None:

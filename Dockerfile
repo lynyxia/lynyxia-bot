@@ -15,18 +15,23 @@ RUN pip install --upgrade pip && pip install .
 
 FROM python:3.12-slim AS runtime
 
+ARG BOT_UID=1000
+ARG BOT_GID=1000
+
 ENV PATH="/opt/venv/bin:$PATH" \
     PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1
 
-RUN groupadd --system bot && \
-    useradd --system --gid bot --home-dir /app --shell /usr/sbin/nologin bot
+# Match the usual host user so bind-mounted ./logs is writable.
+RUN groupadd -g "${BOT_GID}" bot && \
+    useradd -u "${BOT_UID}" -g "${BOT_GID}" --home-dir /app --shell /usr/sbin/nologin bot
 
 WORKDIR /app
 COPY --from=builder /opt/venv /opt/venv
 COPY --from=builder /app /app
 COPY alembic.ini ./alembic.ini
-RUN chown -R bot:bot /app
+# Pre-create writable log directory and personas mount point with bot ownership.
+RUN mkdir -p /app/logs /app/personas && chown -R bot:bot /app
 
 USER bot
 
