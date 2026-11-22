@@ -22,6 +22,7 @@ def settings() -> Settings:
             oauth_bind_host="127.0.0.1",
             oauth_port=8080,
             oauth_scopes=["user:read:chat", "user:write:chat"],
+            channel_scopes=["channel:bot"],
         ),
         database=DatabaseSettings(
             host="localhost",

@@ -73,5 +73,10 @@ def test_oauth_scopes_accept_single_string() -> None:
     assert config.oauth_scopes == ["user:read:chat"]
 
 
+def test_default_channel_scopes(settings) -> None:
+    assert settings.twitch.channel_scopes == ["channel:bot"]
+    assert twitch_settings(channel_scopes="channel:bot").channel_scopes == ["channel:bot"]
+
+
 def test_defaults_include_all_foundations_modules(settings) -> None:
     assert settings.enabled_modules == ["chat_logger", "quotes", "ai_chat"]

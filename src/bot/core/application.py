@@ -55,6 +55,9 @@ class Application:
     def _create_bot(self) -> Any:
         # Imported lazily so unit tests don't need a TwitchIO event loop.
         from bot.core.bot import BotAdapter, BotClient
+        from bot.database.repositories.channel_authorization import (
+            ChannelAuthorizationRepository,
+        )
         from bot.database.repositories.oauth_token import OAuthTokenRepository
 
         twitch = self.settings.twitch
@@ -70,9 +73,12 @@ class Application:
             client_secret=twitch.client_secret.get_secret_value(),
             bot_id=twitch.bot_id,
             channel_ids=twitch.channel_id,
+            channel_logins=twitch.channel,
             redirect_uri=twitch.oauth_redirect_uri,
             scopes=twitch.oauth_scopes,
+            channel_scopes=twitch.channel_scopes,
             token_store=OAuthTokenRepository(self.database),
+            channel_token_store=ChannelAuthorizationRepository(self.database),
             adapter=adapter,
             prefix="!",
         )

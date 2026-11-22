@@ -1,5 +1,6 @@
 """Checks the TwitchIO 3.x EventSub and OAuth integration."""
 
+from collections.abc import Sequence
 from datetime import UTC, datetime, timedelta, timezone
 from unittest.mock import AsyncMock
 
@@ -21,6 +22,25 @@ class StubTokenStore:
         self.saved.append((user_id, access_token, refresh_token, scopes))
 
 
+class StubChannelStore:
+    def __init__(self, records: Sequence[object] = ()) -> None:
+        self.records = list(records)
+        self.saved: list[tuple[str, str, str, str, str]] = []
+
+    async def list_all(self):
+        return self.records
+
+    async def save(
+        self,
+        channel_id: str,
+        login: str,
+        access_token: str,
+        refresh_token: str,
+        scopes: str = "",
+    ) -> None:
+        self.saved.append((channel_id, login, access_token, refresh_token, scopes))
+
+
 class Validated:
     user_id = "42"
 
@@ -35,6 +55,7 @@ def make_bot(
     settings,
     router: EventRouter | None = None,
     token_store: StubTokenStore | None = None,
+    channel_store: StubChannelStore | None = None,
 ) -> BotClient:
     return BotClient(
         router=router or EventRouter(),
@@ -42,9 +63,12 @@ def make_bot(
         client_secret=settings.twitch.client_secret.get_secret_value(),
         bot_id=settings.twitch.bot_id,
         channel_ids=settings.twitch.channel_id,
+        channel_logins=settings.twitch.channel,
         redirect_uri=settings.twitch.oauth_redirect_uri,
         scopes=settings.twitch.oauth_scopes,
+        channel_scopes=settings.twitch.channel_scopes,
         token_store=token_store or StubTokenStore(),
+        channel_token_store=channel_store or StubChannelStore(),
         prefix="!",
     )
 
@@ -350,6 +374,200 @@ async def test_message_timestamp_is_normalized_to_utc(settings) -> None:
     assert seen[0].sent_at.utcoffset() == timedelta(0)
     assert seen[0].sent_at.hour == 12
     assert seen[0].sent_at.tzinfo is UTC
+
+
+async def test_threaded_reply_uses_twitch_reply_to_message_id(settings) -> None:
+    router = EventRouter()
+    replies: list[str] = []
+
+    async def handler(ctx: CommandContext) -> None:
+        replies.append(ctx.command)
+        await ctx.reply_threaded("threaded answer")
+
+    router.on_command("rq", handler)
+    bot = make_bot(settings, router)
+
+    class User:
+        def __init__(self, user_id: str, name: str) -> None:
+            self.id = user_id
+            self.name = name
+
+    class Broadcaster(User):
+        def __init__(self) -> None:
+            super().__init__("7", "channel")
+            self.send_message = AsyncMock()
+
+    broadcaster = Broadcaster()
+
+    class Message:
+        text = "!rq Kappa123"
+        id = "parent-msg"
+        chatter = User("99", "chatter")
+
+        async def respond(self, _content: str) -> None:
+            raise AssertionError("standalone respond should not be used")
+
+    Message.broadcaster = broadcaster  # type: ignore[attr-defined]
+    await bot.event_message(Message())
+
+    assert replies == ["rq"]
+    broadcaster.send_message.assert_awaited_once_with(
+        "threaded answer", sender="42", reply_to_message_id="parent-msg"
+    )
+
+
+def test_channel_authorization_url_uses_channel_scopes(settings) -> None:
+    url = make_bot(settings).channel_authorization_url()
+    assert "scope=channel%3Abot" in url
+    assert "client_id=test-client-id" in url
+
+
+async def test_broadcaster_callback_marks_channel_authorized(settings) -> None:
+    store = StubChannelStore()
+    bot = make_bot(settings, channel_store=store)
+    stored_token(bot, "7")
+
+    class Broadcaster:
+        user_id = "7"
+
+    bot.add_token = AsyncMock(return_value=Broadcaster())  # type: ignore[method-assign]
+
+    await bot.event_oauth_authorized(
+        Payload(user_id="7", access_token="access", refresh_token="refresh")
+    )
+
+    assert "7" in bot._authorized_channels
+    assert store.saved[0][:2] == ("7", "testchannel")
+    assert store.saved[0][3] == "stored-refresh"
+
+
+async def test_channel_token_refresh_is_persisted(settings) -> None:
+    store = StubChannelStore()
+    bot = make_bot(settings, channel_store=store)
+    stored_token(bot, "7")
+    bot._authorized_channels.add("7")
+
+    await bot.event_token_refreshed(Payload(user_id="7"))
+
+    assert store.saved[0][0] == "7"
+
+
+async def test_setup_hook_logs_missing_channel_authorization(settings, caplog) -> None:
+    bot = make_bot(settings)
+    bot.subscribe_websocket = AsyncMock()  # type: ignore[method-assign]
+
+    await bot.setup_hook()
+
+    assert "must authorize the bot" in caplog.text
+    assert "testchannel" in caplog.text
+    assert "scope=channel%3Abot" in caplog.text
+
+
+async def test_unauthorized_send_falls_back_to_user_token(settings, caplog) -> None:
+    router = EventRouter()
+
+    async def handler(ctx: CommandContext) -> None:
+        await ctx.reply("hello")
+
+    router.on_command("ping", handler)
+    bot = make_bot(settings, router)
+    stored_token(bot, "42")
+
+    class Unauthorized(Exception):
+        status = 401
+
+    class User:
+        id = "99"
+        name = "chatter"
+
+    send = AsyncMock(side_effect=[Unauthorized(), None])
+
+    class Broadcaster:
+        id = "7"
+        name = "testchannel"
+
+    class Message:
+        text = "!ping"
+        id = "msg-1"
+        chatter = User()
+        broadcaster = Broadcaster()
+
+    Message.broadcaster.send_message = send  # type: ignore[attr-defined]
+    await bot.event_message(Message())
+
+    assert send.await_count == 2
+    assert "token_for" not in send.await_args_list[0].kwargs
+    assert send.await_args_list[1].kwargs["token_for"] == "42"
+    assert "using the bot user token" in caplog.text
+    assert "scope=channel%3Abot" in caplog.text
+
+
+async def test_fallback_failure_is_logged(settings, caplog) -> None:
+    router = EventRouter()
+
+    async def handler(ctx: CommandContext) -> None:
+        await ctx.reply("hello")
+
+    router.on_command("ping", handler)
+    bot = make_bot(settings, router)
+    stored_token(bot, "42")
+
+    class Unauthorized(Exception):
+        status = 401
+
+    class User:
+        id = "99"
+        name = "chatter"
+
+    send = AsyncMock(side_effect=Unauthorized())
+
+    class Broadcaster:
+        id = "7"
+        name = "testchannel"
+
+    class Message:
+        text = "!ping"
+        id = "msg-1"
+        chatter = User()
+        broadcaster = Broadcaster()
+
+    Message.broadcaster.send_message = send  # type: ignore[attr-defined]
+    await bot.event_message(Message())
+
+    assert send.await_count == 2
+    assert "Fallback user-token send failed" in caplog.text
+
+
+async def test_authorized_channel_does_not_fallback(settings) -> None:
+    router = EventRouter()
+
+    async def handler(ctx: CommandContext) -> None:
+        await ctx.reply("hello")
+
+    router.on_command("ping", handler)
+    bot = make_bot(settings, router)
+    bot._authorized_channels.add("7")
+    send = AsyncMock()
+
+    class User:
+        id = "99"
+        name = "chatter"
+
+    class Broadcaster:
+        id = "7"
+        name = "testchannel"
+
+    class Message:
+        text = "!ping"
+        id = "msg-1"
+        chatter = User()
+        broadcaster = Broadcaster()
+
+    Message.broadcaster.send_message = send  # type: ignore[attr-defined]
+    await bot.event_message(Message())
+
+    assert send.await_count == 1
+    assert "token_for" not in send.await_args.kwargs
 
 
 async def test_bot_ignores_its_own_messages(settings) -> None:

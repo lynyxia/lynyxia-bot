@@ -143,10 +143,29 @@ class ChatMessageRepository(BaseRepository):
             await session.commit()
         return int(result.rowcount or 0)
 
-    async def get_random(self, channel_id: str) -> ChatMessage | None:
+    async def get_random(
+        self,
+        channel_id: str,
+        excluded_user_ids: Sequence[str] = (),
+    ) -> ChatMessage | None:
+        stmt = select(ChatMessage).where(ChatMessage.channel_id == channel_id)
+        if excluded_user_ids:
+            stmt = stmt.where(ChatMessage.user_id.not_in(tuple(excluded_user_ids)))
+        stmt = stmt.order_by(func.random()).limit(1)
+        async with self.database.session() as session:
+            result = await session.execute(stmt)
+            return result.scalar_one_or_none()
+
+    async def get_random_by_user_id(
+        self, channel_id: str, user_id: str
+    ) -> ChatMessage | None:
+        """Find a random message from a stable Twitch user ID."""
         stmt = (
             select(ChatMessage)
-            .where(ChatMessage.channel_id == channel_id)
+            .where(
+                ChatMessage.channel_id == channel_id,
+                ChatMessage.user_id == user_id,
+            )
             .order_by(func.random())
             .limit(1)
         )
@@ -154,7 +173,10 @@ class ChatMessageRepository(BaseRepository):
             result = await session.execute(stmt)
             return result.scalar_one_or_none()
 
-    async def get_random_by_user(self, channel_id: str, user_login: str) -> ChatMessage | None:
+    async def get_random_by_user(
+        self, channel_id: str, user_login: str
+    ) -> ChatMessage | None:
+        """Deprecated: resolve logins via ``UserRepository`` and use IDs instead."""
         stmt = (
             select(ChatMessage)
             .join(User, ChatMessage.user_id == User.id)

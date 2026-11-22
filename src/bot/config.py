@@ -37,6 +37,8 @@ class TwitchSettings(BaseModel):
             "channel:bot",
         ]
     )
+    # Scopes a broadcaster grants so the app token can send in their channel.
+    channel_scopes: list[str] = Field(default_factory=lambda: ["channel:bot"])
 
     @field_validator("bot_id")
     @classmethod
@@ -45,7 +47,9 @@ class TwitchSettings(BaseModel):
             raise ValueError("Twitch IDs must be numeric strings")
         return value
 
-    @field_validator("channel", "channel_id", "oauth_scopes", mode="before")
+    @field_validator(
+        "channel", "channel_id", "oauth_scopes", "channel_scopes", mode="before"
+    )
     @classmethod
     def _as_list(cls, value: object) -> object:
         return [value] if isinstance(value, str) else value

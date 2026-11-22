@@ -27,6 +27,7 @@ src/bot/
 ├── modules/
 │   ├── base.py              # Module / ModuleContext contract
 │   ├── chat_logger/         # batched chat message persistence
+│   ├── quotes/              # !rq commands
 │   └── <feature>/           # one Module subclass per package
 ├── services/
 │   ├── database.py          # engine, session factory, pooling, retry
@@ -161,6 +162,26 @@ ID in `BOT_TWITCH__CHANNEL_ID`. Each `CommandContext` carries the originating
 channel's ID and name, and `ctx.reply()` answers in that same channel. Token
 values are never logged, and no token file is written to disk.
 
+### Per-channel broadcaster authorization
+
+Chat replies prefer the **app access token** so that Twitch applies its **Chat
+Bot badge**. Twitch requires each broadcaster to grant `channel:bot` to the app
+(or the bot to be a moderator) before an app token may send in that channel.
+
+On startup the bot logs one authorization URL for every configured channel that
+has no stored authorization. The channel owner opens their URL and logs in as
+the **broadcaster**. The callback stores that token in the
+`channel_authorizations` table, and TwitchIO refreshes it automatically.
+
+- Requested scopes are configured with `BOT_TWITCH__CHANNEL_SCOPES` (default
+  `["channel:bot"]`).
+- If an app-token send returns `401`, the bot retries once with its own managed
+  **user token**, so commands keep working before a channel is authorized (or
+  while its grant is revoked). Those messages do **not** get the Chat Bot
+  badge; a single info log per channel explains how to fix that.
+- A successful app-token send (including channels where the bot is a moderator)
+  keeps the badge and does not use the fallback.
+
 > **Startup log note:** `twitchio.client: If you require the StarletteAdapter
 > please install ... 'pip install twitchio[starlette]'` is informational. This
 > bot uses the built-in aiohttp adapter, so the extra package is not needed.
@@ -181,7 +202,8 @@ All variables are read in `src/bot/config.py`. Nested settings use `__`.
 | `BOT_TWITCH__CHANNEL` | JSON array of matching channel names (informational) |
 | `BOT_TWITCH__OAUTH_REDIRECT_URI` | Public callback URL registered with Twitch |
 | `BOT_TWITCH__OAUTH_BIND_HOST`, `BOT_TWITCH__OAUTH_PORT` | Bind address/port for the callback server |
-| `BOT_TWITCH__OAUTH_SCOPES` | JSON array of scopes requested at authorization |
+| `BOT_TWITCH__OAUTH_SCOPES` | JSON array of scopes requested at bot authorization |
+| `BOT_TWITCH__CHANNEL_SCOPES` | JSON array of scopes each broadcaster grants |
 | `BOT_DATABASE__HOST/PORT/USER/PASSWORD/NAME` | Database connection (host is overridden to `db` in Compose) |
 | `BOT_DATABASE__POOL_SIZE`, `BOT_DATABASE__MAX_OVERFLOW` | Connection pooling |
 | `BOT_DATABASE__CONNECT_RETRIES`, `BOT_DATABASE__CONNECT_RETRY_DELAY` | Startup readiness retries |
@@ -218,6 +240,33 @@ stores both the stable Twitch `user_id` and the chatter's `username`. All
 timestamps are normalized to UTC before insertion, and every pooled database
 connection uses the UTC session timezone. On shutdown the queue is drained
 before the worker exits.
+
+### Quotes settings
+
+| Key | Default | Purpose |
+| --- | --- | --- |
+| `excluded_users` | `[]` | Twitch logins or numeric IDs excluded from `!rq` |
+
+Example:
+
+```bash
+BOT_MODULE__QUOTES='{"excluded_users":["someuser","123456789"]}'
+```
+
+`!rq` returns a random message from the current channel. `!rq <username>`
+resolves the login to a stable Twitch ID and picks a random message from that
+user. The reply uses the `username` stored with the message, so quotes from
+renamed users keep their old name. Requests for excluded or unknown users reply
+`User not found.`, and excluded users are also omitted from bare `!rq` results.
+
+All `!rq` replies are posted as a Twitch **threaded reply** to the command
+message, not as a standalone chat message. The quote format is:
+
+```
+[2021-08-11 17:25:54] @Kappa123: yeah, nice socks Kappa
+```
+
+The timestamp is the message's UTC `sent_at` formatted as `YYYY-MM-DD HH:MM:SS`.
 
 ---
 
@@ -264,7 +313,42 @@ Alembic reads the same validated `DatabaseSettings` as the application. The
 revision `0001` creates `channels`, `users` and `chat_messages`, using Twitch
 IDs as stable identifiers and appropriate indexes/constraints. Revision `0002`
 adds `oauth_tokens` for the bot-managed token pair; revision `0003` adds the
-chatter's `username` to each logged message.
+chatter's `username` to each logged message; revision `0004` adds
+`channel_authorizations` for per-channel broadcaster grants.
+
+### Importing legacy SQLite logs
+
+`bot.tools.import_sqlite_logs` generates a PostgreSQL SQL script from an old
+`logs.db`; it does **not** write to the database itself. Its source table must
+contain `id`, `datetime`, `username` and `message`; `datetime` is
+`YYYY-MM-DD HH:MM:SS` in UTC. The SQLite `id` is **ignored** and PostgreSQL
+assigns a new one.
+
+```bash
+# Put logs.db in the project root first; it is gitignored.
+docker compose run --rm bot python -m bot.tools.import_sqlite_logs \
+  --source logs.db --user-map user_map.json --output legacy_import.sql --dry-run
+
+# Drop --dry-run to generate the SQL file, then apply it yourself:
+psql "$DATABASE_URL" -f legacy_import.sql
+```
+
+The tool asks for the channel's numeric ID and login, then asks once for the
+Twitch user ID of each distinct username. Answers are cached in `user_map.json`
+so reruns don't re-prompt; pass an existing map with `--user-map`. `--dry-run`
+previews the SQL without writing any files.
+
+The generated script:
+
+- upserts the channel and user rows;
+- inserts messages with `twitch_message_id` left `NULL`;
+- lowercases `login` while keeping the original `display_name`;
+- recomputes `first_seen_at` / `last_seen_at` from the imported messages;
+- guards each message insert with `WHERE NOT EXISTS`, so applying the script
+  twice does not duplicate rows (matched on UTC timestamp, username, content).
+
+The tool needs no database credentials at all — only the SQLite file and your
+answers. Review the generated SQL before running it against PostgreSQL.
 
 ---
 
@@ -315,6 +399,7 @@ class GreeterModule(Module):
 
     async def on_hello(self, ctx) -> None:
         await ctx.reply(f"Hello @{ctx.author_name}!")
+        # Use ctx.reply_threaded(text) to answer inside the command's thread.
 
     async def on_message(self, event: ChatMessageEvent) -> None:
         # `event` is a normalized ChatMessageEvent (no TwitchIO objects).
@@ -374,15 +459,24 @@ supported in this milestone.
 - Multi-stage non-root Docker image, Compose with healthchecks and volumes
 - Unit + optional integration tests, Ruff configuration
 
-**Milestone 2 — in progress**
+**Milestone 2 — chat logger (done)**
 
-- Chat logger: normalized `ChatMessageEvent`, bounded queue, batched async
-  writes, atomic channel/user upserts, graceful drain on shutdown
+- Normalized `ChatMessageEvent`, bounded queue, batched async writes, atomic
+  channel/user upserts, username logging, UTC timestamps, graceful drain
+
+**Milestone 3 — quotes (done)**
+
+- `!rq` and `!rq <username>`, excluded-user configuration, threaded replies
+  using the username recorded with each message
+
+**Milestone 4 — operations (done)**
+
+- Legacy SQLite log importer generating a reviewable SQL script
+- Per-channel broadcaster OAuth so app-token sends keep the Chat Bot badge
 
 **Explicitly deferred to later milestones**
 
 - AI Chat (`!chat`, `!chatsettings` allowlist, LLM adapter, cooldowns)
-- Quotes (`!rq`, `!rq username`)
 - Retention cleanup scheduling (repository method exists)
 - LLM provider dependency and concrete adapter
 - Hot-reloading

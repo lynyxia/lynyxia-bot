@@ -1,11 +1,5 @@
-"""Quotes module — foundation stub.
+"""Quotes module: random chat message quotes via ``!rq``."""
 
-``!rq`` commands will be implemented in a later milestone using
-``ChatMessageRepository.get_random*``.
-"""
+from bot.modules.quotes.module import QuotesModule
 
-from bot.modules.base import Module
-
-
-class QuotesModule(Module):
-    name = "quotes"
+__all__ = ["QuotesModule"]

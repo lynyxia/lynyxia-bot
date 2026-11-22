@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from collections.abc import Sequence
 from typing import Any
 from urllib.parse import urlencode
 
@@ -25,6 +26,9 @@ from twitchio.ext import commands
 from twitchio.web import AiohttpAdapter
 
 from bot.core.event_router import ChatMessageEvent, CommandContext, EventRouter
+from bot.database.repositories.channel_authorization import (
+    ChannelAuthorizationRepository,
+)
 from bot.database.repositories.oauth_token import OAuthTokenRepository
 from bot.utils.time import as_utc
 
@@ -61,15 +65,19 @@ class BotClient(commands.Bot):
         router: EventRouter,
         bot_id: str,
         channel_ids: list[str],
+        channel_logins: list[str],
         client_id: str,
         redirect_uri: str,
         scopes: list[str],
+        channel_scopes: list[str],
         token_store: OAuthTokenRepository,
+        channel_token_store: ChannelAuthorizationRepository,
         **kwargs: Any,
     ) -> None:
         self._client_id = client_id
         self._redirect_uri = redirect_uri
         self._scopes = list(scopes)
+        self._channel_scopes = list(channel_scopes)
         super().__init__(
             client_id=client_id,
             bot_id=bot_id,
@@ -79,50 +87,90 @@ class BotClient(commands.Bot):
         )
         self.router = router
         self.channel_ids = list(channel_ids)
+        self.channel_logins = list(channel_logins)
         self._token_store = token_store
+        self._channel_token_store = channel_token_store
+        self._authorized_channels: set[str] = set()
+        self._warned_channels: set[str] = set()
+        self._fallback_warned_channels: set[str] = set()
         self._chat_subscribed = False
         self._subscribe_lock = asyncio.Lock()
 
     # ------------------------------------------------------------------
     # OAuth token lifecycle
     # ------------------------------------------------------------------
-    @property
-    def authorization_url(self) -> str:
-        """One-time URL for authorizing the bot account."""
+    def _authorization_url(self, scopes: Sequence[str]) -> str:
         params = {
             "client_id": self._client_id,
             "redirect_uri": self._redirect_uri,
             "response_type": "code",
-            "scope": " ".join(self._scopes),
+            "scope": " ".join(scopes),
         }
         return "https://id.twitch.tv/oauth2/authorize?" + urlencode(params)
 
+    @property
+    def authorization_url(self) -> str:
+        """One-time URL for authorizing the bot account."""
+        return self._authorization_url(self._scopes)
+
+    def channel_authorization_url(self) -> str:
+        """URL a broadcaster opens to grant ``channel:bot`` to the app."""
+        return self._authorization_url(self._channel_scopes)
+
+    def _login_for(self, channel_id: str) -> str:
+        for known_id, login in zip(self.channel_ids, self.channel_logins, strict=False):
+            if known_id == channel_id:
+                return login
+        return channel_id
+
     async def load_tokens(self, path: str | None = None) -> None:
-        """Load the bot token from PostgreSQL instead of a JSON file."""
+        """Load bot and per-channel tokens from PostgreSQL instead of a file."""
         record = await self._token_store.get(self.bot_id)
         if record is None:
             log.info("No stored Twitch token for bot user %s", self.bot_id)
-            return
-        try:
-            validated = await self.add_token(record.access_token, record.refresh_token)
-        except Exception:
-            # TwitchIO token errors can contain the raw token; never log them.
-            log.error(
-                "Stored Twitch token for bot user %s could not be validated; "
-                "authorization is required",
-                self.bot_id,
-            )
-            return
-        if str(getattr(validated, "user_id", "") or "") != self.bot_id:
-            log.error(
-                "Stored Twitch token belongs to a different user; authorization is required"
-            )
-            return
-        log.info("Loaded stored Twitch token for bot user %s", self.bot_id)
+        else:
+            try:
+                validated = await self.add_token(record.access_token, record.refresh_token)
+            except Exception:
+                # TwitchIO token errors can contain the raw token; never log them.
+                log.error(
+                    "Stored Twitch token for bot user %s could not be validated; "
+                    "authorization is required",
+                    self.bot_id,
+                )
+            else:
+                if str(getattr(validated, "user_id", "") or "") == self.bot_id:
+                    log.info("Loaded stored Twitch token for bot user %s", self.bot_id)
+                else:
+                    log.error(
+                        "Stored Twitch token belongs to a different user; "
+                        "authorization is required"
+                    )
+
+        for channel in await self._channel_token_store.list_all():
+            try:
+                validated = await self.add_token(
+                    channel.access_token, channel.refresh_token
+                )
+            except Exception:
+                log.error(
+                    "Stored authorization for channel %s could not be validated",
+                    channel.channel_id,
+                )
+                continue
+            if str(getattr(validated, "user_id", "") or "") != channel.channel_id:
+                log.error(
+                    "Stored authorization for channel %s belongs to a different user",
+                    channel.channel_id,
+                )
+                continue
+            self._authorized_channels.add(channel.channel_id)
 
     async def save_tokens(self, path: str | None = None) -> None:
-        """Persist the current token pair on shutdown."""
+        """Persist the current token pairs on shutdown."""
         await self._persist_token()
+        for channel_id in self._authorized_channels:
+            await self._persist_channel_token(channel_id)
 
     async def _persist_token(self) -> None:
         entry = self.tokens.get(self.bot_id)
@@ -138,30 +186,60 @@ class BotClient(commands.Bot):
         except Exception:
             log.error("Failed to persist Twitch OAuth token for bot user %s", self.bot_id)
 
-    async def event_oauth_authorized(self, payload: Any) -> None:
-        """Called by TwitchIO after the browser authorization callback."""
-        user_id = str(getattr(payload, "user_id", "") or "")
-        if user_id != self.bot_id:
-            log.error(
-                "Authorization completed by user %s; expected bot user %s",
-                user_id,
-                self.bot_id,
-            )
+    async def _persist_channel_token(self, channel_id: str) -> None:
+        entry = self.tokens.get(channel_id)
+        if entry is None:
             return
         try:
-            await self.add_token(payload.access_token, payload.refresh_token)
+            await self._channel_token_store.save(
+                channel_id,
+                self._login_for(channel_id),
+                entry["token"],
+                entry["refresh"],
+                " ".join(self._channel_scopes),
+            )
         except Exception:
-            log.error("Failed to register the authorized Twitch token")
+            log.error("Failed to persist authorization for channel %s", channel_id)
+
+    async def event_oauth_authorized(self, payload: Any) -> None:
+        """Route the callback to the bot account or a broadcaster."""
+        user_id = str(getattr(payload, "user_id", "") or "")
+
+        if user_id == self.bot_id:
+            try:
+                await self.add_token(payload.access_token, payload.refresh_token)
+            except Exception:
+                log.error("Failed to register the authorized Twitch token")
+                return
+            await self._persist_token()
+            await self._subscribe_chat()
+            log.info("Twitch authorization completed for bot user %s", self.bot_id)
             return
-        await self._persist_token()
-        await self._subscribe_chat()
-        log.info("Twitch authorization completed for bot user %s", self.bot_id)
+
+        if user_id in self.channel_ids:
+            try:
+                await self.add_token(payload.access_token, payload.refresh_token)
+            except Exception:
+                log.error("Failed to register authorization for channel %s", user_id)
+                return
+            await self._persist_channel_token(user_id)
+            self._authorized_channels.add(user_id)
+            self._warned_channels.discard(user_id)
+            log.info(
+                "Channel %s authorized the app for chat sends",
+                self._login_for(user_id),
+            )
+            return
+
+        log.error("Authorization completed by unexpected user %s", user_id)
 
     async def event_token_refreshed(self, payload: Any) -> None:
         """Persist rotated refresh tokens so restarts keep working."""
-        if str(getattr(payload, "user_id", "") or "") != self.bot_id:
-            return
-        await self._persist_token()
+        user_id = str(getattr(payload, "user_id", "") or "")
+        if user_id == self.bot_id:
+            await self._persist_token()
+        elif user_id in self.channel_ids:
+            await self._persist_channel_token(user_id)
 
     # ------------------------------------------------------------------
     # EventSub and event routing
@@ -199,6 +277,16 @@ class BotClient(commands.Bot):
                 "Twitch authorization required. Open this URL once and log in as "
                 "the bot account: %s",
                 self.authorization_url,
+            )
+
+        for channel_id in self.channel_ids:
+            if channel_id in self._authorized_channels:
+                continue
+            log.warning(
+                "Channel %s (%s) must authorize the bot for chat sends (bot badge): %s",
+                self._login_for(channel_id),
+                channel_id,
+                self.channel_authorization_url(),
             )
 
     async def event_ready(self) -> None:
@@ -249,13 +337,76 @@ class BotClient(commands.Bot):
         if not parts:
             return
 
-        async def reply(text: str) -> None:
-            responder = getattr(message, "respond", None)
-            if responder is not None:
-                await responder(text)
+        async def _send(text: str, *, reply_to_message_id: str | None = None) -> None:
+            """Prefer the app token (bot badge), fall back to the user token."""
+            send = getattr(broadcaster, "send_message", None)
+            if send is None:
+                responder = getattr(message, "respond", None)
+                if responder is not None:
+                    await responder(text)
+                elif broadcaster is not None and hasattr(broadcaster, "send"):
+                    await broadcaster.send(text)
                 return
-            if broadcaster is not None and hasattr(broadcaster, "send"):
-                await broadcaster.send(text)
+
+            channel_id = event.channel_id
+
+            async def deliver(*, token_for: str | None) -> None:
+                kwargs: dict[str, Any] = {"sender": self.bot_id}
+                if token_for is not None:
+                    kwargs["token_for"] = token_for
+                if reply_to_message_id:
+                    kwargs["reply_to_message_id"] = reply_to_message_id
+                await send(text, **kwargs)
+
+            try:
+                await deliver(token_for=None)
+                return
+            except Exception as exc:
+                if getattr(exc, "status", None) != 401:
+                    log.warning(
+                        "Chat send failed in channel %s (%s)",
+                        channel_id,
+                        type(exc).__name__,
+                    )
+                    return
+
+            # 401 means the app lacks channel:bot or moderator status in this
+            # channel. Use the bot user token until the broadcaster authorizes.
+            if self.bot_id not in self.tokens:
+                log.warning(
+                    "Chat sends unauthorized in channel %s and no bot user token "
+                    "is available; have the broadcaster authorize: %s",
+                    channel_id,
+                    self.channel_authorization_url(),
+                )
+                return
+
+            try:
+                await deliver(token_for=self.bot_id)
+            except Exception as exc:
+                log.warning(
+                    "Fallback user-token send failed in channel %s (%s)",
+                    channel_id,
+                    type(exc).__name__,
+                )
+                return
+
+            if channel_id not in self._fallback_warned_channels:
+                self._fallback_warned_channels.add(channel_id)
+                log.info(
+                    "Channel %s is using the bot user token for sends "
+                    "(no Chat Bot badge until authorized): %s",
+                    self._login_for(channel_id),
+                    self.channel_authorization_url(),
+                )
+
+        async def reply(text: str) -> None:
+            await _send(text)
+
+        async def reply_threaded(text: str) -> None:
+            """Answer inside the thread of the command message."""
+            message_id = getattr(message, "id", None)
+            await _send(text, reply_to_message_id=message_id)
 
         ctx = CommandContext(
             command=parts[0].lower(),
@@ -267,5 +418,6 @@ class BotClient(commands.Bot):
             content=content,
             reply=reply,
             raw=message,
+            reply_threaded=reply_threaded,
         )
         await self.router.dispatch_command(ctx)

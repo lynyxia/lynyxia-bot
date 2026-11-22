@@ -19,7 +19,12 @@ from pydantic import SecretStr
 from bot.config import DatabaseSettings
 from bot.core.event_router import ChatMessageEvent
 from bot.database.models import Base, Channel, User
-from bot.database.repositories import ChatMessageRepository, OAuthTokenRepository
+from bot.database.repositories import (
+    ChannelAuthorizationRepository,
+    ChatMessageRepository,
+    OAuthTokenRepository,
+    UserRepository,
+)
 from bot.services.database import DatabaseService
 
 TEST_DATABASE_URL = os.getenv("TEST_DATABASE_URL")
@@ -74,6 +79,17 @@ async def test_repository_roundtrip() -> None:
         assert user_quote is not None
         assert user_quote.content == "hello world"
 
+        users = UserRepository(database)
+        chatter = await users.get_by_login("CHATTER")
+        assert chatter is not None
+        assert chatter.id == "42"
+        assert await users.get_by_login("nobody") is None
+
+        by_id = await repository.get_random_by_user_id("7", "42")
+        assert by_id is not None
+        assert by_id.content == "hello world"
+        assert await repository.get_random("7", ("42", "43")) is None
+
         now = datetime.now(UTC)
         events = [
             ChatMessageEvent(
@@ -114,6 +130,16 @@ async def test_repository_roundtrip() -> None:
         assert rotated.access_token == "access-2"
         await tokens.delete("42")
         assert await tokens.get("42") is None
+
+        channels = ChannelAuthorizationRepository(database)
+        assert await channels.get("7") is None
+        await channels.save("7", "streamer", "access", "refresh", "channel:bot")
+        stored_channel = await channels.get("7")
+        assert stored_channel is not None
+        assert stored_channel.broadcaster_login == "streamer"
+        assert len(await channels.list_all()) == 1
+        await channels.delete("7")
+        assert await channels.get("7") is None
     finally:
         async with database._engine.begin() as connection:
             await connection.run_sync(Base.metadata.drop_all)
