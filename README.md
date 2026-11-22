@@ -277,7 +277,7 @@ Only simple filenames are accepted — no subdirectories or path traversal.
 | `!chatset allow <username\|id>` | bot owner / channel owner | Add someone to the channel allowlist |
 | `!chatset list` | bot owner / channel owner | List the allowlist |
 | `!chatset remove <username\|id>` | bot owner / channel owner | Remove someone |
-| `!chat [question]` | allowlisted users | Ask the LLM; mention the bot with `@` also works |
+| `!chat [question]` | allowlisted users | Ask the LLM; a leading `@botname` works too |
 
 The channel owner is detected by comparing the sender's ID with `ctx.channel_id`;
 bot owners come from `BOT_ADMIN_USER_IDS`.
@@ -289,8 +289,20 @@ instruction naming the requester, so `@name` mentions of *other* users in the
 question are not mistaken for the sender. A leading `@botname` is stripped
 from the question itself.
 
-`!chat` and mentions start a fresh context. Replies in the same Twitch thread
-reuse stored context from `ai_chat_threads`. The history, tool rounds and
+A mention only activates the bot when it is the **first thing the chatter typed**
+(`@botname hello`); a mid-sentence `@botname` is ignored. Twitch's automatically
+added `@<thread user>` prefix on replies is skipped, so leading mentions still
+work inside threads — on replies the first `@name` token (Twitch's generated
+thread prefix) is skipped unless it is the bot itself. Activations from users
+not on the allowlist are silently ignored — no reply is sent.
+
+Set `BOT_LOGGING__LEVEL=INFO` to log every incoming chat message as
+`INFO bot.core.bot: Chat message: ...`, including its channel, author, message
+ID, reply/thread IDs, mention IDs and raw text — useful for diagnosing why a
+mention did or did not activate the module.
+
+`!chat` and leading mentions start a fresh context. Replies in the same Twitch
+thread reuse stored context from `ai_chat_threads`. The history, tool rounds and
 response length are all capped by config, and per-user cooldowns limit abuse.
 All replies are threaded and pass through the shared send queue and blocklist.
 

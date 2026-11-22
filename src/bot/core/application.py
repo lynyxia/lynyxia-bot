@@ -93,6 +93,7 @@ class Application:
             client_id=twitch.client_id,
             client_secret=twitch.client_secret.get_secret_value(),
             bot_id=twitch.bot_id,
+            bot_login=twitch.bot_username,
             channel_ids=twitch.channel_id,
             channel_logins=twitch.channel,
             redirect_uri=twitch.oauth_redirect_uri,

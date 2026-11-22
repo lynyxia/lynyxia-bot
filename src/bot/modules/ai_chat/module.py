@@ -184,7 +184,7 @@ class AIChatModule(Module):
     async def on_chat(self, ctx: CommandContext) -> None:
         assert self._allowlist is not None and self._threads is not None
         if not await self._allowlist.contains(ctx.channel_id, ctx.author_id):
-            await ctx.reply("You are not allowed to use chat.")
+            # Silently ignore non-allowlisted users; don't advertise the feature.
             return
         if self._llm is None:
             await ctx.reply("AI chat is not configured.")

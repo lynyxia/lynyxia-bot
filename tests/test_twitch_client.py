@@ -64,6 +64,7 @@ def make_bot(
         client_id=settings.twitch.client_id,
         client_secret=settings.twitch.client_secret.get_secret_value(),
         bot_id=settings.twitch.bot_id,
+        bot_login=settings.twitch.bot_username,
         channel_ids=settings.twitch.channel_id,
         channel_logins=settings.twitch.channel,
         redirect_uri=settings.twitch.oauth_redirect_uri,
@@ -498,6 +499,160 @@ async def test_mention_dispatches_chat_command(settings) -> None:
     await bot.event_message(message)
 
     assert seen == ["@testbot hello there"]
+
+
+async def test_middle_mention_does_not_dispatch_chat_command(settings) -> None:
+    router = EventRouter()
+    seen: list[str] = []
+
+    async def handler(ctx: CommandContext) -> None:
+        seen.append(ctx.content)
+
+    router.on_command("chat", handler)
+    bot = make_bot(settings, router)
+
+    message = SimpleNamespace(
+        text="I wonder what @testbot is doing today",
+        id="msg-1",
+        chatter=SimpleNamespace(id="99", name="chatter", display_name="Chatter"),
+        broadcaster=SimpleNamespace(id="7", name="channel", display_name="Channel"),
+        mentions=[SimpleNamespace(id="42")],
+    )
+    await bot.event_message(message)
+
+    assert seen == []
+
+
+async def test_leading_mention_is_case_insensitive_and_word_bounded(settings) -> None:
+    router = EventRouter()
+    seen: list[str] = []
+
+    async def handler(ctx: CommandContext) -> None:
+        seen.append(ctx.content)
+
+    router.on_command("chat", handler)
+    bot = make_bot(settings, router)
+
+    for text, expected in (
+        ("  @TESTBOT hello", ["@TESTBOT hello"]),
+        ("@testbot2 hello", []),
+    ):
+        seen.clear()
+        message = SimpleNamespace(
+            text=text,
+            id="msg-1",
+            chatter=SimpleNamespace(id="99", name="chatter", display_name="Chatter"),
+            broadcaster=SimpleNamespace(id="7", name="channel", display_name="Channel"),
+            mentions=[SimpleNamespace(id="42")],
+        )
+        await bot.event_message(message)
+        assert seen == expected
+
+
+async def test_leading_mention_in_thread_dispatches_chat_command(settings) -> None:
+    router = EventRouter()
+    seen: list[str] = []
+
+    async def handler(ctx: CommandContext) -> None:
+        seen.append(ctx.content)
+
+    router.on_command("chat", handler)
+    bot = make_bot(settings, router)
+
+    # Twitch prepends a mention of the thread starter to replies; the bot
+    # mention is still the start of what the chatter typed.
+    message = SimpleNamespace(
+        text="@otheruser @testbot hello there",
+        id="msg-1",
+        chatter=SimpleNamespace(id="99", name="chatter", display_name="Chatter"),
+        broadcaster=SimpleNamespace(id="7", name="channel", display_name="Channel"),
+        reply=SimpleNamespace(
+            thread_user=SimpleNamespace(login="otheruser"),
+            parent_user=SimpleNamespace(login="otheruser"),
+        ),
+        mentions=[SimpleNamespace(id="42")],
+    )
+    await bot.event_message(message)
+
+    assert seen == ["@testbot hello there"]
+
+
+async def test_reply_prefix_is_stripped_even_without_reply_user_fields(settings) -> None:
+    router = EventRouter()
+    seen: list[str] = []
+
+    async def handler(ctx: CommandContext) -> None:
+        seen.append(ctx.content)
+
+    router.on_command("chat", handler)
+    bot = make_bot(settings, router)
+
+    # Matches the real EventSub shape: Twitch adds @FiveOfEight ahead of the
+    # chatter's own @TestBot mention, and reply user fields are not usable.
+    message = SimpleNamespace(
+        text="@FiveOfEight @TestBot what was my original question?",
+        id="m1",
+        chatter=SimpleNamespace(id="99", name="fiveofeight", display_name="FiveOfEight"),
+        broadcaster=SimpleNamespace(id="7", name="c", display_name="C"),
+        reply=SimpleNamespace(thread_message_id="t1", parent_message_id="p1"),
+        mentions=[SimpleNamespace(id="99"), SimpleNamespace(id="42")],
+    )
+    await bot.event_message(message)
+
+    assert seen == ["@TestBot what was my original question?"]
+
+
+async def test_mention_in_thread_started_by_bot_dispatches(settings) -> None:
+    router = EventRouter()
+    seen: list[str] = []
+
+    async def handler(ctx: CommandContext) -> None:
+        seen.append(ctx.content)
+
+    router.on_command("chat", handler)
+    bot = make_bot(settings, router)
+
+    # Replying to the bot makes Twitch prefix the message with @testbot; that
+    # prefix must not be stripped, otherwise the activation disappears.
+    message = SimpleNamespace(
+        text="@testbot hello there",
+        id="msg-1",
+        chatter=SimpleNamespace(id="99", name="chatter", display_name="Chatter"),
+        broadcaster=SimpleNamespace(id="7", name="channel", display_name="Channel"),
+        reply=SimpleNamespace(
+            thread_user=SimpleNamespace(login="testbot"),
+            parent_user=SimpleNamespace(login="testbot"),
+        ),
+    )
+    await bot.event_message(message)
+
+    assert seen == ["@testbot hello there"]
+
+
+async def test_middle_mention_in_thread_does_not_dispatch(settings) -> None:
+    router = EventRouter()
+    seen: list[str] = []
+
+    async def handler(ctx: CommandContext) -> None:
+        seen.append(ctx.content)
+
+    router.on_command("chat", handler)
+    bot = make_bot(settings, router)
+
+    message = SimpleNamespace(
+        text="@otheruser I wonder what @testbot is doing today",
+        id="msg-1",
+        chatter=SimpleNamespace(id="99", name="chatter", display_name="Chatter"),
+        broadcaster=SimpleNamespace(id="7", name="channel", display_name="Channel"),
+        reply=SimpleNamespace(
+            thread_user=SimpleNamespace(login="otheruser"),
+            parent_user=SimpleNamespace(login="otheruser"),
+        ),
+        mentions=[SimpleNamespace(id="42")],
+    )
+    await bot.event_message(message)
+
+    assert seen == []
 
 
 def test_channel_authorization_url_uses_channel_scopes(settings) -> None:

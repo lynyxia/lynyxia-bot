@@ -292,7 +292,7 @@ async def test_chat_requires_allowlist(settings, monkeypatch) -> None:
 
     await module.on_chat(ctx)
 
-    assert replies == ["You are not allowed to use chat."]
+    assert replies == []
     assert llm.calls == []
 
 
