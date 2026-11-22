@@ -32,6 +32,7 @@ def test_discovery_finds_foundation_modules(settings) -> None:
         "ecount",
         "lines",
         "ai_chat",
+        "lynyxia",
     }
 
 

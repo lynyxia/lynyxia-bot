@@ -3,7 +3,7 @@
 A Python 3.12+ framework for building Twitch chatbots out of small, independent
 modules. The core provides lifecycle management, module discovery, configuration,
 event routing, PostgreSQL/Alembic persistence and Docker deployment; the feature
-modules are `chat_logger`, `quotes`, `ecount`, `lines` and `ai_chat`.
+modules are `chat_logger`, `quotes`, `ecount`, `lines`, `ai_chat` and `lynyxia`.
 
 ---
 
@@ -25,10 +25,12 @@ src/bot/
 │   ├── chat_logger/         # batched chat message persistence
 │   ├── ecount/              # !ecount emote usage counts
 │   ├── lines/               # !lines per-user message counts
+│   ├── lynxia/              # !lynyxia per-channel output toggle
 │   ├── quotes/              # !rq commands
 │   └── <feature>/           # one Module subclass per package
 ├── services/
 │   ├── database.py          # engine, session factory, pooling, retry
+│   ├── output_gate.py       # cached per-channel "may we send?" state
 │   ├── twitch.py            # thin client wrapper
 │   ├── llm.py               # LLM provider interface
 │   └── llm_openai.py        # OpenAI-compatible adapter (custom base_url)
@@ -264,6 +266,23 @@ queued. Matching is **case-insensitive and whole-word only**: `con` matches
 `BOT_CHAT__BANNED_PHRASE_REPLACEMENT` and logs
 `blocklisted phrase detected in: <original message>` to the console.
 
+### Per-channel output control
+
+| Command | Permission | Purpose |
+| --- | --- | --- |
+| `!lynyxia disable` | bot admin / channel owner | Stop all chat output in this channel |
+| `!lynyxia enable` | bot admin / channel owner | Resume chat output in this channel |
+| `!lynyxia` | bot admin / channel owner | Show the current state |
+
+The bot stays in the channel and keeps logging messages while output is
+disabled — it simply stops sending anything to chat. The check lives at the
+send layer, so it covers module replies, `!chat`/mention replies, AI answers and
+`TwitchService.send_message()` alike. Only this command's own confirmation is
+allowed through, so an admin can never be locked out of re-enabling output.
+The state is stored per channel in PostgreSQL (`channel_states`) and survives
+restarts; channels without a stored row are enabled by default. Unauthorized
+users are ignored silently.
+
 ### AI chat settings
 
 The AI chat module is configured through `BOT_MODULE__AI_CHAT` (see
@@ -443,7 +462,8 @@ IDs as stable identifiers and appropriate indexes/constraints. Revision `0002`
 adds `oauth_tokens` for the bot-managed token pair; revision `0003` adds the
 chatter's `username` to each logged message; revision `0004` adds
 `channel_authorizations` for per-channel broadcaster grants; revision `0005`
-adds the AI chat settings, allowlist and thread tables.
+adds the AI chat settings, allowlist and thread tables; revision `0006` adds
+`channel_states` for the per-channel output toggle.
 
 ### Importing legacy SQLite logs
 
@@ -620,6 +640,11 @@ supported in this milestone.
 
 - `!lines <username|id>` with stable-ID resolution and configurable date format
 - Single-query, per-channel count plus first-message timestamp
+
+**Milestone 8 — per-channel output control (done)**
+
+- `!lynyxia disable|enable` for admins/channel owners, persisted in PostgreSQL
+- Send-layer gate that silences all chat output while logging continues
 
 **Explicitly deferred to later milestones**
 

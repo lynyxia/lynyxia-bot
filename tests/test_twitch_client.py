@@ -58,6 +58,7 @@ def make_bot(
     token_store: StubTokenStore | None = None,
     channel_store: StubChannelStore | None = None,
     chat_sender=None,
+    output_gate=None,
 ) -> BotClient:
     return BotClient(
         router=router or EventRouter(),
@@ -73,6 +74,7 @@ def make_bot(
         token_store=token_store or StubTokenStore(),
         channel_token_store=channel_store or StubChannelStore(),
         chat_sender=chat_sender,
+        output_gate=output_gate,
         prefix="!",
     )
 
@@ -456,6 +458,62 @@ async def test_replies_are_submitted_with_their_content(settings) -> None:
     await bot.event_message(Message())
 
     assert sender.calls == [("hello there", "7")]
+
+
+class _CapturingSender:
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, str]] = []
+
+    async def submit(self, send, content: str, channel_id: str) -> bool:
+        self.calls.append((content, channel_id))
+        return True
+
+
+class _Gate:
+    def __init__(self, enabled: bool) -> None:
+        self.enabled = enabled
+
+    async def is_enabled(self, channel_id: str) -> bool:
+        return self.enabled
+
+
+class _SimpleMessage:
+    text = "!ping"
+    id = "msg-1"
+    chatter = SimpleNamespace(id="99", name="chatter")
+    broadcaster = SimpleNamespace(id="7", name="channel")
+
+
+async def test_output_gate_blocks_replies_but_allows_forced(settings) -> None:
+    router = EventRouter()
+
+    async def handler(ctx: CommandContext) -> None:
+        await ctx.reply("blocked")
+        await ctx.reply_force("allowed")
+
+    router.on_command("ping", handler)
+    sender = _CapturingSender()
+    bot = make_bot(settings, router, chat_sender=sender, output_gate=_Gate(False))
+
+    await bot.event_message(_SimpleMessage())
+
+    assert sender.calls == [("allowed", "7")]
+
+
+async def test_output_gate_allows_replies_when_enabled(settings) -> None:
+    router = EventRouter()
+
+    async def handler(ctx: CommandContext) -> None:
+        await ctx.reply("normal")
+        await ctx.reply_force("forced")
+
+    router.on_command("ping", handler)
+    sender = _CapturingSender()
+    bot = make_bot(settings, router, chat_sender=sender, output_gate=_Gate(True))
+
+    await bot.event_message(_SimpleMessage())
+
+    assert sender.calls == [("normal", "7"), ("forced", "7")]
 
 
 async def test_command_context_includes_author_login(settings) -> None:

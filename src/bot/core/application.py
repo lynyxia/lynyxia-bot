@@ -18,8 +18,10 @@ from bot.core.chat_send_queue import ChatSendQueue
 from bot.core.event_router import EventRouter
 from bot.core.module_manager import ModuleManager
 from bot.core.permissions import PermissionService
+from bot.database.repositories.channel_state import ChannelStateRepository
 from bot.services import Services
 from bot.services.database import DatabaseService
+from bot.services.output_gate import ChannelOutputGate
 from bot.services.twitch import TwitchService
 from bot.utils.logging import configure_logging
 
@@ -51,11 +53,13 @@ class Application:
         self.twitch = TwitchService()
         self.permissions = PermissionService(settings.admin_user_ids)
         self.llm = self._create_llm_provider()
+        self.output_gate = ChannelOutputGate(ChannelStateRepository(self.database))
         self.services = Services(
             database=self.database,
             twitch=self.twitch,
             llm=self.llm,
             permissions=self.permissions,
+            output_gate=self.output_gate,
         )
         self.modules = ModuleManager(settings, self.router, self.services)
 
@@ -102,6 +106,7 @@ class Application:
             token_store=OAuthTokenRepository(self.database),
             channel_token_store=ChannelAuthorizationRepository(self.database),
             chat_sender=self.chat_queue,
+            output_gate=self.output_gate,
             adapter=adapter,
             prefix="!",
         )
@@ -117,7 +122,7 @@ class Application:
         elif hasattr(self._bot, "router"):
             self._bot.router = self.router
 
-        self.twitch.bind(self._bot, self.chat_queue)
+        self.twitch.bind(self._bot, self.chat_queue, self.output_gate)
         self._bot_task = asyncio.create_task(self._run_bot())
         log.info("Application started")
 

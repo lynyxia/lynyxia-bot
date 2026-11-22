@@ -35,11 +35,19 @@ class CommandContext:
     raw: Any = field(default=None, repr=False)
     reply_threaded: Callable[[str], Awaitable[None]] | None = None
     thread_id: str | None = None
+    # reply_force bypasses the per-channel output gate. It is reserved for the
+    # control command that turns output back on, so an admin is never locked
+    # out of a channel they silenced.
+    reply_force: Callable[[str], Awaitable[None]] | None = None
 
     def __post_init__(self) -> None:
-        # Handlers that don't need threading can use the plain reply.
+        # Handlers that don't need threading can use the plain reply. Contexts
+        # built outside the Twitch client (e.g. tests) default to unrestricted
+        # replies; the client wires the gated and force variants explicitly.
         if self.reply_threaded is None:
             self.reply_threaded = self.reply
+        if self.reply_force is None:
+            self.reply_force = self.reply
 
 
 @dataclass(frozen=True)

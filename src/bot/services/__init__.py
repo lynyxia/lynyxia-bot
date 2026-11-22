@@ -16,3 +16,4 @@ class Services:
     twitch: Any = None
     llm: Any = None
     permissions: Any = None
+    output_gate: Any = None

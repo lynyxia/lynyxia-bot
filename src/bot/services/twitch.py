@@ -18,14 +18,30 @@ class TwitchService:
     def __init__(self) -> None:
         self._client: Any = None
         self._sender: ChatSender = DirectChatSender()
+        self._output_gate: Any = None
 
-    def bind(self, client: Any, sender: ChatSender | None = None) -> None:
+    def bind(
+        self,
+        client: Any,
+        sender: ChatSender | None = None,
+        output_gate: Any = None,
+    ) -> None:
         self._client = client
         if sender is not None:
             self._sender = sender
+        if output_gate is not None:
+            self._output_gate = output_gate
 
-    async def send_message(self, channel_id: str, content: str) -> None:
+    async def send_message(
+        self, channel_id: str, content: str, *, force: bool = False
+    ) -> None:
         """Queue ``content`` for the channel identified by ``channel_id``."""
+        if (
+            not force
+            and self._output_gate is not None
+            and not await self._output_gate.is_enabled(channel_id)
+        ):
+            return
         if self._client is None:
             raise RuntimeError("Twitch client is not available")
 

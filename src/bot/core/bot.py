@@ -76,6 +76,7 @@ class BotClient(commands.Bot):
         token_store: OAuthTokenRepository,
         channel_token_store: ChannelAuthorizationRepository,
         chat_sender: ChatSender | None = None,
+        output_gate: Any | None = None,
         **kwargs: Any,
     ) -> None:
         self._client_id = client_id
@@ -96,6 +97,7 @@ class BotClient(commands.Bot):
         self._token_store = token_store
         self._channel_token_store = channel_token_store
         self._chat_sender = chat_sender or DirectChatSender()
+        self._output_gate = output_gate
         self._authorized_channels: set[str] = set()
         self._warned_channels: set[str] = set()
         self._fallback_warned_channels: set[str] = set()
@@ -391,9 +393,26 @@ class BotClient(commands.Bot):
             content,
         )
 
-        async def _send(text: str, *, reply_to_message_id: str | None = None) -> None:
-            """Queue a send; prefer the app token, fall back to the user token."""
+        async def _send(
+            text: str,
+            *,
+            reply_to_message_id: str | None = None,
+            force: bool = False,
+        ) -> None:
+            """Queue a send; prefer the app token, fall back to the user token.
+
+            Unless ``force`` is set, the per-channel output gate can silence the
+            send. Only the control command uses ``force`` so an admin can always
+            re-enable output in a channel they disabled it in.
+            """
             channel_id = event.channel_id
+            if not force and self._output_gate is not None:
+                if not await self._output_gate.is_enabled(channel_id):
+                    log.info(
+                        "Output disabled in channel %s; dropping message",
+                        event.channel_name,
+                    )
+                    return
             send = getattr(broadcaster, "send_message", None)
 
             async def deliver(content: str, *, token_for: str | None) -> None:
@@ -459,6 +478,10 @@ class BotClient(commands.Bot):
         async def reply(text: str) -> None:
             await _send(text)
 
+        async def reply_force(text: str) -> None:
+            """Reply even when the channel has output disabled."""
+            await _send(text, force=True)
+
         async def reply_threaded(text: str) -> None:
             """Answer inside the thread of the command message."""
             message_id = getattr(message, "id", None)
@@ -476,6 +499,7 @@ class BotClient(commands.Bot):
                 channel_name=event.channel_name,
                 content=activation_text,
                 reply=reply,
+                reply_force=reply_force,
                 raw=message,
                 reply_threaded=reply_threaded,
                 thread_id=thread_id,
@@ -499,6 +523,7 @@ class BotClient(commands.Bot):
             channel_name=event.channel_name,
             content=content,
             reply=reply,
+            reply_force=reply_force,
             raw=message,
             reply_threaded=reply_threaded,
             thread_id=thread_id,

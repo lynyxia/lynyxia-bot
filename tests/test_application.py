@@ -14,6 +14,7 @@ async def test_application_lifecycle(settings, fake_database, fake_bot) -> None:
         "ecount",
         "lines",
         "ai_chat",
+        "lynyxia",
     }
     assert fake_bot.router is app.router
     assert app.twitch._client is fake_bot

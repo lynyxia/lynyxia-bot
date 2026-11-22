@@ -115,4 +115,5 @@ def test_defaults_include_all_foundations_modules(settings) -> None:
         "ecount",
         "lines",
         "ai_chat",
+        "lynyxia",
     ]
