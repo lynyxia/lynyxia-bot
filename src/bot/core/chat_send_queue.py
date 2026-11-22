@@ -9,31 +9,32 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass
 from typing import Protocol
 
 log = logging.getLogger(__name__)
 
-Send = Callable[[], Awaitable[None]]
+Send = Callable[[str], Awaitable[None]]
 
 
 class ChatSender(Protocol):
-    async def submit(self, send: Send, channel_id: str) -> bool:
+    async def submit(self, send: Send, content: str, channel_id: str) -> bool:
         """Queue a send; return ``False`` if it was dropped."""
 
 
 class DirectChatSender:
     """Send immediately. Used by standalone tools and tests."""
 
-    async def submit(self, send: Send, channel_id: str) -> bool:
-        await send()
+    async def submit(self, send: Send, content: str, channel_id: str) -> bool:
+        await send(content)
         return True
 
 
 @dataclass
 class _SendJob:
     send: Send
+    content: str
     channel_id: str
 
 
@@ -45,10 +46,18 @@ class ChatSendQueue:
         queue_maxsize: int = 100,
         max_retries: int = 3,
         backoff_base_seconds: float = 1.0,
+        banned_phrases: Sequence[str] = (),
+        banned_phrase_replacement: str = (
+            "[System] Blocklisted phrase detected in reply... Aborting."
+        ),
     ) -> None:
         if min_interval_seconds < 0:
             raise ValueError("min_interval_seconds must be non-negative")
         self._min_interval = min_interval_seconds
+        self._banned_phrases = tuple(
+            phrase.strip().lower() for phrase in banned_phrases if phrase.strip()
+        )
+        self._replacement = banned_phrase_replacement
         self._queue: asyncio.Queue[_SendJob] = asyncio.Queue(maxsize=queue_maxsize)
         self._max_retries = max_retries
         self._backoff_base = backoff_base_seconds
@@ -69,9 +78,16 @@ class ChatSendQueue:
             await self._worker
             self._worker = None
 
-    async def submit(self, send: Send, channel_id: str) -> bool:
+    def _filter(self, content: str) -> str:
+        lowered = content.lower()
+        if any(phrase in lowered for phrase in self._banned_phrases):
+            log.warning("blocklisted phrase detected in: %s", content)
+            return self._replacement
+        return content
+
+    async def submit(self, send: Send, content: str, channel_id: str) -> bool:
         try:
-            self._queue.put_nowait(_SendJob(send, channel_id))
+            self._queue.put_nowait(_SendJob(send, self._filter(content), channel_id))
         except asyncio.QueueFull:
             self.dropped += 1
             log.warning("Chat send queue full; dropped a message for channel %s", channel_id)
@@ -93,7 +109,7 @@ class ChatSendQueue:
     async def _execute(self, job: _SendJob) -> None:
         for attempt in range(self._max_retries + 1):
             try:
-                await job.send()
+                await job.send(job.content)
             except Exception as exc:
                 status = getattr(exc, "status", None)
                 if status != 429 or attempt == self._max_retries:

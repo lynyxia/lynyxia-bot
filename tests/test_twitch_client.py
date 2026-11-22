@@ -56,6 +56,7 @@ def make_bot(
     router: EventRouter | None = None,
     token_store: StubTokenStore | None = None,
     channel_store: StubChannelStore | None = None,
+    chat_sender=None,
 ) -> BotClient:
     return BotClient(
         router=router or EventRouter(),
@@ -69,6 +70,7 @@ def make_bot(
         channel_scopes=settings.twitch.channel_scopes,
         token_store=token_store or StubTokenStore(),
         channel_token_store=channel_store or StubChannelStore(),
+        chat_sender=chat_sender,
         prefix="!",
     )
 
@@ -414,6 +416,44 @@ async def test_threaded_reply_uses_twitch_reply_to_message_id(settings) -> None:
     broadcaster.send_message.assert_awaited_once_with(
         "threaded answer", sender="42", reply_to_message_id="parent-msg"
     )
+
+
+async def test_replies_are_submitted_with_their_content(settings) -> None:
+    router = EventRouter()
+
+    async def handler(ctx: CommandContext) -> None:
+        await ctx.reply("hello there")
+
+    router.on_command("ping", handler)
+
+    class CapturingSender:
+        def __init__(self) -> None:
+            self.calls: list[tuple[str, str]] = []
+
+        async def submit(self, send, content: str, channel_id: str) -> bool:
+            self.calls.append((content, channel_id))
+            return True
+
+    sender = CapturingSender()
+    bot = make_bot(settings, router, chat_sender=sender)
+
+    class User:
+        id = "99"
+        name = "chatter"
+
+    class Broadcaster:
+        id = "7"
+        name = "channel"
+
+    class Message:
+        text = "!ping"
+        id = "msg-1"
+        chatter = User()
+        broadcaster = Broadcaster()
+
+    await bot.event_message(Message())
+
+    assert sender.calls == [("hello there", "7")]
 
 
 def test_channel_authorization_url_uses_channel_scopes(settings) -> None:

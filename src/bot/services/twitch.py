@@ -31,8 +31,8 @@ class TwitchService:
 
         client = self._client
 
-        async def deliver() -> None:
+        async def deliver(text: str) -> None:
             channel = client.create_partialuser(channel_id)
-            await channel.send_message(content, sender=client.bot_id)
+            await channel.send_message(text, sender=client.bot_id)
 
-        await self._sender.submit(deliver, channel_id)
+        await self._sender.submit(deliver, content, channel_id)

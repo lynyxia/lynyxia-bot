@@ -118,6 +118,23 @@ class ChatSettings(BaseModel):
     queue_maxsize: int = Field(default=100, ge=1)
     max_retries: int = Field(default=3, ge=0, le=10)
     backoff_base_seconds: float = Field(default=1.0, ge=0, le=30)
+    # Case-insensitive substrings; matched messages are replaced before sending.
+    banned_phrases: list[str] = Field(default_factory=list)
+    banned_phrase_replacement: str = (
+        "[System] Blocklisted phrase detected in reply... Aborting."
+    )
+
+    @field_validator("banned_phrases", mode="before")
+    @classmethod
+    def _as_list(cls, value: object) -> object:
+        return [value] if isinstance(value, str) else value
+
+    @field_validator("banned_phrases")
+    @classmethod
+    def _normalize_phrases(cls, value: list[str]) -> list[str]:
+        phrases = {entry.strip().lower() for entry in value}
+        phrases.discard("")
+        return sorted(phrases)
 
 
 class LoggingSettings(BaseModel):

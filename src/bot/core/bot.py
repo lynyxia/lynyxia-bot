@@ -345,24 +345,24 @@ class BotClient(commands.Bot):
             channel_id = event.channel_id
             send = getattr(broadcaster, "send_message", None)
 
-            async def deliver(*, token_for: str | None) -> None:
+            async def deliver(content: str, *, token_for: str | None) -> None:
                 if send is None:
                     responder = getattr(message, "respond", None)
                     if responder is not None:
-                        await responder(text)
+                        await responder(content)
                     elif broadcaster is not None and hasattr(broadcaster, "send"):
-                        await broadcaster.send(text)
+                        await broadcaster.send(content)
                     return
                 kwargs: dict[str, Any] = {"sender": self.bot_id}
                 if token_for is not None:
                     kwargs["token_for"] = token_for
                 if reply_to_message_id:
                     kwargs["reply_to_message_id"] = reply_to_message_id
-                await send(text, **kwargs)
+                await send(content, **kwargs)
 
-            async def attempt_send() -> None:
+            async def attempt_send(content: str) -> None:
                 try:
-                    await deliver(token_for=None)
+                    await deliver(content, token_for=None)
                     return
                 except Exception as exc:
                     if getattr(exc, "status", None) != 401:
@@ -385,7 +385,7 @@ class BotClient(commands.Bot):
                     return
 
                 try:
-                    await deliver(token_for=self.bot_id)
+                    await deliver(content, token_for=self.bot_id)
                 except Exception as exc:
                     log.warning(
                         "Fallback user-token send failed in channel %s (%s)",
@@ -403,7 +403,7 @@ class BotClient(commands.Bot):
                         self.channel_authorization_url(),
                     )
 
-            await self._chat_sender.submit(attempt_send, channel_id)
+            await self._chat_sender.submit(attempt_send, text, channel_id)
 
         async def reply(text: str) -> None:
             await _send(text)

@@ -73,6 +73,22 @@ def test_oauth_scopes_accept_single_string() -> None:
     assert config.oauth_scopes == ["user:read:chat"]
 
 
+def test_banned_phrase_config(settings) -> None:
+    assert settings.chat.banned_phrases == []
+    assert "KKona" in settings.chat.banned_phrase_replacement
+
+    configured = Settings(
+        twitch=settings.twitch,
+        database=settings.database,
+        chat={
+            "banned_phrases": ["  Bad Word ", "bad word", ""],
+            "banned_phrase_replacement": "[filtered]",
+        },
+    )
+    assert configured.chat.banned_phrases == ["bad word"]
+    assert configured.chat.banned_phrase_replacement == "[filtered]"
+
+
 def test_chat_settings_defaults_and_bounds(settings) -> None:
     assert settings.chat.min_interval_seconds == 1.5
     assert settings.chat.queue_maxsize == 100

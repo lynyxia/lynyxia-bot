@@ -45,6 +45,8 @@ class Application:
             queue_maxsize=settings.chat.queue_maxsize,
             max_retries=settings.chat.max_retries,
             backoff_base_seconds=settings.chat.backoff_base_seconds,
+            banned_phrases=settings.chat.banned_phrases,
+            banned_phrase_replacement=settings.chat.banned_phrase_replacement,
         )
         self.twitch = TwitchService()
         self.permissions = PermissionService(settings.admin_user_ids)
