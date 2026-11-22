@@ -1,7 +1,7 @@
 import pytest
 from pydantic import SecretStr, ValidationError
 
-from bot.config import DatabaseSettings, TwitchSettings
+from bot.config import DatabaseSettings, Settings, TwitchSettings
 
 
 def test_secrets_are_redacted(settings) -> None:
@@ -71,6 +71,17 @@ def test_oauth_redirect_uri_must_be_http() -> None:
 def test_oauth_scopes_accept_single_string() -> None:
     config = twitch_settings(oauth_scopes="user:read:chat")
     assert config.oauth_scopes == ["user:read:chat"]
+
+
+def test_chat_settings_defaults_and_bounds(settings) -> None:
+    assert settings.chat.min_interval_seconds == 1.5
+    assert settings.chat.queue_maxsize == 100
+    with pytest.raises(ValidationError):
+        Settings(
+            twitch=settings.twitch,
+            database=settings.database,
+            chat={"min_interval_seconds": -1},
+        )
 
 
 def test_default_channel_scopes(settings) -> None:

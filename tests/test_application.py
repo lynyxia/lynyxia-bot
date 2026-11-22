@@ -14,6 +14,7 @@ async def test_application_lifecycle(settings, fake_database, fake_bot) -> None:
 
     await asyncio.sleep(0)
     assert fake_bot.started
+    assert app.chat_queue._worker is not None
     assert fake_bot.start_args[0] == ()
     assert fake_bot.start_args[1] == {
         "with_adapter": True,
@@ -26,6 +27,7 @@ async def test_application_lifecycle(settings, fake_database, fake_bot) -> None:
     assert fake_database.disposed
     assert app.modules.modules == {}
     assert app.bot_task is None
+    assert app.chat_queue._worker is None
 
 
 async def test_application_context_manager(settings, fake_database, fake_bot) -> None:

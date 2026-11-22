@@ -25,6 +25,7 @@ from twitchio.eventsub import ChatMessageSubscription
 from twitchio.ext import commands
 from twitchio.web import AiohttpAdapter
 
+from bot.core.chat_send_queue import ChatSender, DirectChatSender
 from bot.core.event_router import ChatMessageEvent, CommandContext, EventRouter
 from bot.database.repositories.channel_authorization import (
     ChannelAuthorizationRepository,
@@ -72,6 +73,7 @@ class BotClient(commands.Bot):
         channel_scopes: list[str],
         token_store: OAuthTokenRepository,
         channel_token_store: ChannelAuthorizationRepository,
+        chat_sender: ChatSender | None = None,
         **kwargs: Any,
     ) -> None:
         self._client_id = client_id
@@ -90,6 +92,7 @@ class BotClient(commands.Bot):
         self.channel_logins = list(channel_logins)
         self._token_store = token_store
         self._channel_token_store = channel_token_store
+        self._chat_sender = chat_sender or DirectChatSender()
         self._authorized_channels: set[str] = set()
         self._warned_channels: set[str] = set()
         self._fallback_warned_channels: set[str] = set()
@@ -338,19 +341,18 @@ class BotClient(commands.Bot):
             return
 
         async def _send(text: str, *, reply_to_message_id: str | None = None) -> None:
-            """Prefer the app token (bot badge), fall back to the user token."""
-            send = getattr(broadcaster, "send_message", None)
-            if send is None:
-                responder = getattr(message, "respond", None)
-                if responder is not None:
-                    await responder(text)
-                elif broadcaster is not None and hasattr(broadcaster, "send"):
-                    await broadcaster.send(text)
-                return
-
+            """Queue a send; prefer the app token, fall back to the user token."""
             channel_id = event.channel_id
+            send = getattr(broadcaster, "send_message", None)
 
             async def deliver(*, token_for: str | None) -> None:
+                if send is None:
+                    responder = getattr(message, "respond", None)
+                    if responder is not None:
+                        await responder(text)
+                    elif broadcaster is not None and hasattr(broadcaster, "send"):
+                        await broadcaster.send(text)
+                    return
                 kwargs: dict[str, Any] = {"sender": self.bot_id}
                 if token_for is not None:
                     kwargs["token_for"] = token_for
@@ -358,47 +360,50 @@ class BotClient(commands.Bot):
                     kwargs["reply_to_message_id"] = reply_to_message_id
                 await send(text, **kwargs)
 
-            try:
-                await deliver(token_for=None)
-                return
-            except Exception as exc:
-                if getattr(exc, "status", None) != 401:
+            async def attempt_send() -> None:
+                try:
+                    await deliver(token_for=None)
+                    return
+                except Exception as exc:
+                    if getattr(exc, "status", None) != 401:
+                        log.warning(
+                            "Chat send failed in channel %s (%s)",
+                            channel_id,
+                            type(exc).__name__,
+                        )
+                        return
+
+                # 401: the app lacks channel:bot/mod status here. Use the bot
+                # user token until the broadcaster authorizes.
+                if self.bot_id not in self.tokens:
                     log.warning(
-                        "Chat send failed in channel %s (%s)",
+                        "Chat sends unauthorized in channel %s and no bot user token "
+                        "is available; have the broadcaster authorize: %s",
+                        channel_id,
+                        self.channel_authorization_url(),
+                    )
+                    return
+
+                try:
+                    await deliver(token_for=self.bot_id)
+                except Exception as exc:
+                    log.warning(
+                        "Fallback user-token send failed in channel %s (%s)",
                         channel_id,
                         type(exc).__name__,
                     )
                     return
 
-            # 401 means the app lacks channel:bot or moderator status in this
-            # channel. Use the bot user token until the broadcaster authorizes.
-            if self.bot_id not in self.tokens:
-                log.warning(
-                    "Chat sends unauthorized in channel %s and no bot user token "
-                    "is available; have the broadcaster authorize: %s",
-                    channel_id,
-                    self.channel_authorization_url(),
-                )
-                return
+                if channel_id not in self._fallback_warned_channels:
+                    self._fallback_warned_channels.add(channel_id)
+                    log.info(
+                        "Channel %s is using the bot user token for sends "
+                        "(no Chat Bot badge until authorized): %s",
+                        self._login_for(channel_id),
+                        self.channel_authorization_url(),
+                    )
 
-            try:
-                await deliver(token_for=self.bot_id)
-            except Exception as exc:
-                log.warning(
-                    "Fallback user-token send failed in channel %s (%s)",
-                    channel_id,
-                    type(exc).__name__,
-                )
-                return
-
-            if channel_id not in self._fallback_warned_channels:
-                self._fallback_warned_channels.add(channel_id)
-                log.info(
-                    "Channel %s is using the bot user token for sends "
-                    "(no Chat Bot badge until authorized): %s",
-                    self._login_for(channel_id),
-                    self.channel_authorization_url(),
-                )
+            await self._chat_sender.submit(attempt_send, channel_id)
 
         async def reply(text: str) -> None:
             await _send(text)

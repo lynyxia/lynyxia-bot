@@ -113,6 +113,13 @@ class LLMSettings(BaseModel):
     max_response_chars: int = 500
 
 
+class ChatSettings(BaseModel):
+    min_interval_seconds: float = Field(default=1.5, ge=0, le=60)
+    queue_maxsize: int = Field(default=100, ge=1)
+    max_retries: int = Field(default=3, ge=0, le=10)
+    backoff_base_seconds: float = Field(default=1.0, ge=0, le=30)
+
+
 class LoggingSettings(BaseModel):
     level: str = "INFO"
 
@@ -130,6 +137,7 @@ class Settings(BaseSettings):
     database: DatabaseSettings
     llm: LLMSettings = Field(default_factory=LLMSettings)
     logging: LoggingSettings = Field(default_factory=LoggingSettings)
+    chat: ChatSettings = Field(default_factory=ChatSettings)
     enabled_modules: list[str] = Field(
         default_factory=lambda: ["chat_logger", "quotes", "ai_chat"]
     )

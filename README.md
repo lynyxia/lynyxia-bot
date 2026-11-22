@@ -209,6 +209,9 @@ All variables are read in `src/bot/config.py`. Nested settings use `__`.
 | `BOT_DATABASE__CONNECT_RETRIES`, `BOT_DATABASE__CONNECT_RETRY_DELAY` | Startup readiness retries |
 | `BOT_LLM__PROVIDER/API_KEY/BASE_URL/MODEL/TIMEOUT_SECONDS/MAX_RESPONSE_CHARS` | Future LLM adapter config |
 | `BOT_LOGGING__LEVEL` | Root log level (e.g. `INFO`) |
+| `BOT_CHAT__MIN_INTERVAL_SECONDS` | Minimum gap between outgoing chat messages (default `1.5`) |
+| `BOT_CHAT__QUEUE_MAXSIZE` | Bounded outbound send queue size |
+| `BOT_CHAT__MAX_RETRIES`, `BOT_CHAT__BACKOFF_BASE_SECONDS` | 429 retry/backoff settings |
 | `BOT_ENABLED_MODULES` | JSON list of module names to load |
 | `BOT_ADMIN_USER_IDS` | JSON list of admin Twitch user IDs |
 | `BOT_MODULE__<NAME>` | JSON object with that module's own config |
@@ -240,6 +243,17 @@ stores both the stable Twitch `user_id` and the chatter's `username`. All
 timestamps are normalized to UTC before insertion, and every pooled database
 connection uses the UTC session timezone. On shutdown the queue is drained
 before the worker exits.
+
+### Chat send pacing
+
+All outgoing chat messages — replies from modules, `TwitchService.send_message()`,
+and the user-token fallback — go through one bounded queue with a single worker.
+The worker waits at least `BOT_CHAT__MIN_INTERVAL_SECONDS` (default `1.5`, roughly
+twenty messages per thirty seconds) between sends, so the limit is enforced
+globally across every channel instead of per handler. `429` responses are
+retried with `Retry-After` when available and exponential backoff otherwise;
+the queue is bounded, so bursts are dropped and counted rather than creating
+unbounded tasks.
 
 ### Quotes settings
 
@@ -473,6 +487,7 @@ supported in this milestone.
 
 - Legacy SQLite log importer generating a reviewable SQL script
 - Per-channel broadcaster OAuth so app-token sends keep the Chat Bot badge
+- Shared, rate-limited outbound chat queue with 429 backoff
 
 **Explicitly deferred to later milestones**
 

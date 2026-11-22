@@ -14,6 +14,7 @@ from contextlib import suppress
 from typing import Any
 
 from bot.config import Settings
+from bot.core.chat_send_queue import ChatSendQueue
 from bot.core.event_router import EventRouter
 from bot.core.module_manager import ModuleManager
 from bot.core.permissions import PermissionService
@@ -39,6 +40,12 @@ class Application:
         self.settings = settings
         self.router = EventRouter()
         self.database = database if database is not None else DatabaseService(settings.database)
+        self.chat_queue = ChatSendQueue(
+            min_interval_seconds=settings.chat.min_interval_seconds,
+            queue_maxsize=settings.chat.queue_maxsize,
+            max_retries=settings.chat.max_retries,
+            backoff_base_seconds=settings.chat.backoff_base_seconds,
+        )
         self.twitch = TwitchService()
         self.permissions = PermissionService(settings.admin_user_ids)
         self.services = Services(
@@ -79,6 +86,7 @@ class Application:
             channel_scopes=twitch.channel_scopes,
             token_store=OAuthTokenRepository(self.database),
             channel_token_store=ChannelAuthorizationRepository(self.database),
+            chat_sender=self.chat_queue,
             adapter=adapter,
             prefix="!",
         )
@@ -87,13 +95,14 @@ class Application:
         await self.database.connect()
         await self.modules.load()
         await self.modules.start_all()
+        await self.chat_queue.start()
 
         if self._bot is None:
             self._bot = self._create_bot()
         elif hasattr(self._bot, "router"):
             self._bot.router = self.router
 
-        self.twitch.bind(self._bot)
+        self.twitch.bind(self._bot, self.chat_queue)
         self._bot_task = asyncio.create_task(self._run_bot())
         log.info("Application started")
 
@@ -135,6 +144,7 @@ class Application:
             self._bot_task = None
 
         await self.modules.stop_all()
+        await self.chat_queue.stop()
         await self.database.dispose()
         log.info("Application stopped")
 
