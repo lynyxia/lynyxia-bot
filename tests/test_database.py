@@ -59,6 +59,7 @@ async def test_repository_roundtrip() -> None:
                     Channel(id="7", login="streamer", display_name="Streamer"),
                     User(id="42", login="chatter", display_name="Chatter"),
                     User(id="43", login="other", display_name="Other"),
+                    User(id="45", login="linecounter", display_name="Line Counter"),
                 ]
             )
             await session.commit()
@@ -124,6 +125,24 @@ async def test_repository_roundtrip() -> None:
             )
             == 0
         )
+
+        # Message stats: count and earliest timestamp in one query, per channel.
+        first_ts = datetime.now(UTC) - timedelta(days=10)
+        second_ts = datetime.now(UTC) - timedelta(days=2)
+        for content, sent_at in (("first line", first_ts), ("second line", second_ts)):
+            await repository.add(
+                channel_id="7",
+                user_id="45",
+                username="linecounter",
+                content=content,
+                sent_at=sent_at,
+            )
+        count, first_at = await repository.count_and_first("7", "45")
+        assert count == 2
+        assert first_at is not None
+        assert first_at.tzinfo is not None
+        assert first_at.date() == first_ts.date()
+        assert await repository.count_and_first("8", "45") == (0, None)
 
         now = datetime.now(UTC)
         events = [

@@ -30,6 +30,7 @@ def test_discovery_finds_foundation_modules(settings) -> None:
         "chat_logger",
         "quotes",
         "ecount",
+        "lines",
         "ai_chat",
     }
 

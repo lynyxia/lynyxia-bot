@@ -156,7 +156,7 @@ class Settings(BaseSettings):
     logging: LoggingSettings = Field(default_factory=LoggingSettings)
     chat: ChatSettings = Field(default_factory=ChatSettings)
     enabled_modules: list[str] = Field(
-        default_factory=lambda: ["chat_logger", "quotes", "ecount", "ai_chat"]
+        default_factory=lambda: ["chat_logger", "quotes", "ecount", "lines", "ai_chat"]
     )
     admin_user_ids: list[str] = Field(default_factory=list)
     # Module-specific configuration, keyed by module name.

@@ -15,3 +15,10 @@ class UserRepository(BaseRepository):
         async with self.database.session() as session:
             result = await session.execute(stmt)
             return result.scalar_one_or_none()
+
+    async def get_by_id(self, user_id: str) -> User | None:
+        """Look up a user by their stable Twitch ID."""
+        if not user_id:
+            return None
+        async with self.database.session() as session:
+            return await session.get(User, user_id)

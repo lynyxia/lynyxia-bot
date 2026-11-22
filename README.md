@@ -3,7 +3,7 @@
 A Python 3.12+ framework for building Twitch chatbots out of small, independent
 modules. The core provides lifecycle management, module discovery, configuration,
 event routing, PostgreSQL/Alembic persistence and Docker deployment; the feature
-modules are `chat_logger`, `quotes`, `ecount` and `ai_chat`.
+modules are `chat_logger`, `quotes`, `ecount`, `lines` and `ai_chat`.
 
 ---
 
@@ -24,6 +24,7 @@ src/bot/
 │   ├── ai_chat/             # personas, allowlist, LLM + tools
 │   ├── chat_logger/         # batched chat message persistence
 │   ├── ecount/              # !ecount emote usage counts
+│   ├── lines/               # !lines per-user message counts
 │   ├── quotes/              # !rq commands
 │   └── <feature>/           # one Module subclass per package
 ├── services/
@@ -222,6 +223,7 @@ Example module configuration:
 BOT_MODULE__AI_CHAT='{"default_persona":"generic.md","cooldown_seconds":5}'
 BOT_MODULE__CHAT_LOGGER='{"batch_size":100,"flush_interval_seconds":2,"queue_maxsize":2000,"retention_days":30}'
 BOT_MODULE__ECOUNT='{"default_days":365,"max_days":3650}'
+BOT_MODULE__LINES='{"date_format":"%Y-%m-%d %H:%M:%S"}'
 ```
 
 Modules read it via `self.context.config` and validate it with their own
@@ -302,6 +304,24 @@ Tools are enabled with the `tools` config array:
 Requests, model reasoning (when the endpoint provides it), tool calls/results
 and final responses are written to `logs/ai.log` via a rotating logger. Docker
 mounts a `logs` volume at `/app/logs`. API keys are never logged.
+
+### Message counter settings
+
+`!lines <username|id>` reports how many messages a user has sent in the current
+channel and when their first message was posted, e.g.
+`chatter has sent 1,234 messages since 2021-08-11 17:25:54.`
+
+| Key | Default | Purpose |
+| --- | --- | --- |
+| `date_format` | `%Y-%m-%d %H:%M:%S` | `strftime` format for the "since" date (UTC) |
+
+Bare `!lines` prints `Usage: !lines <username>`. A leading `@` is ignored.
+Logins are resolved case-insensitively to a stable Twitch ID, so a renamed
+chatter's history stays together; numeric user IDs are also accepted (a missing
+ID falls back to a login lookup). The count and earliest timestamp are fetched
+in a single `COUNT(*), MIN(sent_at)` query scoped to the current channel. No
+schema migration is needed, and replies are threaded and pass through the shared
+send queue and blocklist.
 
 ### Emote counter settings
 
@@ -513,7 +533,7 @@ class GreeterModule(Module):
 Then add it to configuration and restart:
 
 ```bash
-BOT_ENABLED_MODULES='["chat_logger","quotes","ecount","ai_chat","greeter"]'
+BOT_ENABLED_MODULES='["chat_logger","quotes","ecount","lines","ai_chat","greeter"]'
 ```
 
 `settings.enabled_modules` determines what loads; discovery itself is
@@ -583,6 +603,11 @@ supported in this milestone.
 - `!ecount <emote> [timeframe]` with legacy `<number>y|w|d|m` timeframes
 - Per-channel, case-sensitive whole-word counts from `chat_messages`, with
   command invocations excluded and bounded by a configurable lookback window
+
+**Milestone 7 — message counter (done)**
+
+- `!lines <username|id>` with stable-ID resolution and configurable date format
+- Single-query, per-channel count plus first-message timestamp
 
 **Explicitly deferred to later milestones**
 

@@ -208,6 +208,21 @@ class ChatMessageRepository(BaseRepository):
             result = await session.execute(stmt)
             return result.scalar_one_or_none()
 
+    async def count_and_first(
+        self, channel_id: str, user_id: str
+    ) -> tuple[int, datetime | None]:
+        """Return a user's message count and their earliest timestamp in a channel."""
+        stmt = select(
+            func.count(), func.min(ChatMessage.sent_at)
+        ).where(
+            ChatMessage.channel_id == channel_id,
+            ChatMessage.user_id == user_id,
+        )
+        async with self.database.session() as session:
+            result = await session.execute(stmt)
+            count, first_at = result.one()
+        return int(count), first_at
+
     async def count_emote(
         self,
         channel_id: str,
