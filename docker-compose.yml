@@ -40,6 +40,8 @@ services:
     volumes:
       # Personas can be added/removed from the host without rebuilding.
       - ./personas:/app/personas:ro
+      # Trivia category files (category_*.json) are supplied from the host.
+      - ./trivia:/app/trivia:ro
       # AI request/reasoning/response logs are visible on the host.
       - ./logs:/app/logs
     depends_on:

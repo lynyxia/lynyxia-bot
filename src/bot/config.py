@@ -238,6 +238,7 @@ class Settings(BaseSettings):
             "ai_chat",
             "lynyxia",
             "livepass",
+            "trivia",
         ]
     )
     admin_user_ids: list[str] = Field(default_factory=list)

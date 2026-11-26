@@ -30,8 +30,8 @@ WORKDIR /app
 COPY --from=builder /opt/venv /opt/venv
 COPY --from=builder /app /app
 COPY alembic.ini ./alembic.ini
-# Pre-create writable log directory and personas mount point with bot ownership.
-RUN mkdir -p /app/logs /app/personas && chown -R bot:bot /app
+# Pre-create writable log directory and read-only personas/trivia mount points.
+RUN mkdir -p /app/logs /app/personas /app/trivia && chown -R bot:bot /app
 
 USER bot
 

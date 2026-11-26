@@ -124,6 +124,7 @@ def test_defaults_include_all_foundations_modules(settings) -> None:
         "ai_chat",
         "lynyxia",
         "livepass",
+        "trivia",
     ]
 
 

@@ -34,6 +34,7 @@ def test_discovery_finds_foundation_modules(settings) -> None:
         "ai_chat",
         "lynyxia",
         "livepass",
+        "trivia",
     }
 
 

@@ -29,6 +29,7 @@ src/bot/
 │   ├── livepass/            # !livepass per-channel live allowlist
 │   ├── lynxia/              # !lynyxia per-channel output toggle
 │   ├── quotes/              # !rq commands
+│   ├── trivia/              # !trivia/!hint/!pass, JSON category files
 │   └── <feature>/           # one Module subclass per package
 ├── services/
 │   ├── database.py          # engine, session factory, pooling, retry
@@ -232,6 +233,7 @@ BOT_MODULE__AI_CHAT='{"default_persona":"generic.md","cooldown_seconds":5}'
 BOT_MODULE__CHAT_LOGGER='{"batch_size":100,"flush_interval_seconds":2,"queue_maxsize":2000,"retention_days":30}'
 BOT_MODULE__ECOUNT='{"default_days":365,"max_days":3650}'
 BOT_MODULE__LINES='{"date_format":"%Y-%m-%d %H:%M:%S"}'
+BOT_MODULE__TRIVIA='{"directory":"trivia","timeout_seconds":60,"hint_delay_seconds":10,"similarity_threshold":0.9}'
 ```
 
 Modules read it via `self.context.config` and validate it with their own
@@ -456,6 +458,46 @@ message, not as a standalone chat message. The quote format is:
 
 The timestamp is the message's UTC `sent_at` formatted as `YYYY-MM-DD HH:MM:SS`.
 
+### Trivia settings
+
+| Key | Default | Purpose |
+| --- | --- | --- |
+| `directory` | `trivia` | Directory containing the category files (relative to `/app` in Docker) |
+| `file_prefix` | `category_` | Filename prefix that marks a trivia file |
+| `file_suffix` | `.json` | Filename suffix for trivia files |
+| `timeout_seconds` | `60` | Seconds before the round times out and reveals the answer |
+| `hint_delay_seconds` | `10` | Seconds to wait before `!hint` reveals the options |
+| `similarity_threshold` | `0.9` | Minimum fuzzy-match score for an accepted answer |
+
+Example:
+
+```bash
+BOT_MODULE__TRIVIA='{"directory":"trivia","timeout_seconds":60,"hint_delay_seconds":10}'
+```
+
+Each file in `./trivia` is one category: `category_Anime-Manga.json` becomes the
+`Anime-Manga` category. Files are JSON arrays of objects with `type`
+(`multiple` or `boolean`), `question`, `correct_answer` and `incorrect_answers`
+(plus optional `category`/`difficulty`). Files are re-read on every `!trivia`
+command, so adding a file to the mounted directory works without a restart.
+
+| Command | Permission | Purpose |
+| --- | --- | --- |
+| `!trivia` | anyone (when commands are allowed) | Start a round from a random category |
+| `!trivia <category>` | anyone (when commands are allowed) | Start a round from a named category |
+| `!trivia categories` | anyone (when commands are allowed) | List available categories |
+| `!hint` | anyone | Show the four options after the delay (not available for True/False) |
+| `!pass` | the user who started the round | Skip and reveal the correct answer |
+
+Answers are accepted from any chat message in the same channel (so viewers do
+not need a command). Matching is case-insensitive and fuzzy, so minor typos are
+accepted. **Every string from the JSON is HTML-unescaped** with `html.unescape()`
+before it is shown in chat — `&quot;Dino Run&#039;s Invasion&quot;` appears as
+`"Dino Run's Invasion"`, and entities such as `&eacute;` are decoded too. The
+same normalization is applied to guesses, so typing `Andr&eacute;s` also works.
+Sessions are per channel, time out via async timers, and all output passes
+through the shared send queue and the per-channel output gate.
+
 ---
 
 ## 6. Starting the application with Docker Compose
@@ -473,10 +515,10 @@ docker compose logs -f bot
 - Credentials come only from `.env`; none are baked into the image.
 - Compose publishes the OAuth callback port (default `8080`) so you can
   complete the one-time authorization from your browser.
-- `./personas` is mounted read-only at `/app/personas`; `./logs` is bind-mounted
-  at `/app/logs`, so `ai.log` is visible on the host. The image's non-root user
-  uses UID/GID `1000` by default (override with `BOT_UID`/`BOT_GID` build args
-  if your host user differs).
+- `./personas` and `./trivia` are mounted read-only at `/app/personas` and
+  `/app/trivia`; `./logs` is bind-mounted at `/app/logs`, so `ai.log` is visible
+  on the host. The image's non-root user uses UID/GID `1000` by default
+  (override with `BOT_UID`/`BOT_GID` build args if your host user differs).
 
 Stop everything (data volume is preserved):
 
@@ -703,6 +745,12 @@ supported in this milestone.
 
 - Multiple named OpenAI-compatible endpoints configured via `BOT_LLM__ENDPOINTS`
 - `!chatset model <endpoint>/<model>` selects endpoint and model per channel
+
+**Milestone 11 — trivia (done)**
+
+- `!trivia`/`!hint`/`!pass` with per-channel sessions and async timeout timers
+- JSON category files supplied through the read-only `./trivia` volume
+- All question/answer text is HTML-unescaped before appearing in chat
 
 **Explicitly deferred to later milestones**
 

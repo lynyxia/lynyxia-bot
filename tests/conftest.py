@@ -38,6 +38,7 @@ def settings() -> Settings:
             "ai_chat",
             "lynyxia",
             "livepass",
+            "trivia",
         ],
         admin_user_ids=["42"],
     )

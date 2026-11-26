@@ -1,0 +1,26 @@
+[
+  {
+    "type": "multiple",
+    "difficulty": "easy",
+    "category": "Sample Questions",
+    "question": "What&#039;s the official name of the fear of running out of cheese?",
+    "correct_answer": "Caseinophobia",
+    "incorrect_answers": [
+      "Fromaphobia",
+      "Tyrophobia",
+      "Lactophobia"
+    ]
+  },
+  {
+    "type": "multiple",
+    "difficulty": "hard",
+    "category": "Sample Questions",
+    "question": "Who won the &quot;Dino Run&#039;s Invasion&quot; tournament in 2042?",
+    "correct_answer": "Jumping Lizards",
+    "incorrect_answers": [
+      "Stallion",
+      "Red Skull",
+      "Wizard Squad"
+    ]
+  }
+]
