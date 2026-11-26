@@ -4,6 +4,9 @@ The source table must have ``id``, ``datetime``, ``username`` and ``message``
 columns. The SQLite ``id`` is ignored; PostgreSQL assigns new IDs. Datetimes
 are ``YYYY-MM-DD HH:MM:SS`` in UTC.
 
+The SQLite file is read in two streaming passes and the SQL is written to disk
+incrementally, so memory use is independent of the number of messages.
+
 Run with:
     python -m bot.tools.import_sqlite_logs --source logs.db --dry-run
     python -m bot.tools.import_sqlite_logs --source logs.db \
@@ -17,9 +20,10 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import itertools
 import json
 import sqlite3
-from collections.abc import Sequence
+from collections.abc import Iterator, Sequence
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -28,6 +32,7 @@ from typing import Any
 from bot.utils.time import as_utc
 
 SOURCE_COLUMNS = {"id", "datetime", "username", "message"}
+PREVIEW_LINES = 14
 
 
 @dataclass(frozen=True)
@@ -35,6 +40,23 @@ class ParsedMessage:
     username: str
     sent_at: datetime
     content: str
+
+
+@dataclass(frozen=True)
+class UserActivity:
+    display_name: str
+    first: datetime
+    last: datetime
+
+
+@dataclass(frozen=True)
+class SourceSummary:
+    """Bounded result of the first pass: distinct users, bounds and counts."""
+
+    usernames: list[str]
+    activity: dict[str, UserActivity]  # keyed by lower-cased username
+    valid: int
+    invalid: int
 
 
 def find_source_table(connection: sqlite3.Connection) -> str:
@@ -66,32 +88,87 @@ def parse_datetime(value: object) -> datetime | None:
     return as_utc(parsed)
 
 
-def read_messages(path: Path) -> tuple[list[ParsedMessage], int]:
-    """Return valid messages and the number of skipped/invalid rows."""
+def iter_source_rows(path: Path) -> Iterator[tuple[object, object, object]]:
+    """Yield (datetime, username, message) lazily; ``id`` is never selected."""
     if not path.exists():
         raise FileNotFoundError(f"SQLite source not found: {path}")
 
     connection = sqlite3.connect(path)
     try:
         table = find_source_table(connection)
-        quoted = table.replace('"', '""')
-        rows = connection.execute(
-            f'SELECT id, datetime, username, message FROM "{quoted}"'
-        ).fetchall()
-    finally:
+    except BaseException:
         connection.close()
+        raise
+    quoted = table.replace('"', '""')
 
-    messages: list[ParsedMessage] = []
+    def stream() -> Iterator[tuple[object, object, object]]:
+        try:
+            # sqlite3 cursors are lazy: each row is fetched only when asked for.
+            # Only these three columns are selected; the source id is ignored.
+            yield from connection.execute(
+                f'SELECT datetime, username, message FROM "{quoted}"'
+            )
+        finally:
+            connection.close()
+
+    return stream()
+
+
+def parse_row(
+    raw_datetime: object, raw_username: object, raw_content: object
+) -> ParsedMessage | None:
+    """Validate one source row without materializing anything else."""
+    sent_at = parse_datetime(raw_datetime)
+    username = str(raw_username or "").strip()
+    content = str(raw_content or "").strip()
+    if sent_at is None or not username or not content:
+        return None
+    return ParsedMessage(username, sent_at, content)
+
+
+def read_messages(path: Path) -> Iterator[ParsedMessage]:
+    """Yield valid messages one at a time; invalid rows are skipped."""
+    source = iter_source_rows(path)
+
+    def messages() -> Iterator[ParsedMessage]:
+        for raw_datetime, raw_username, raw_content in source:
+            message = parse_row(raw_datetime, raw_username, raw_content)
+            if message is not None:
+                yield message
+
+    return messages()
+
+
+def summarize_source(path: Path) -> SourceSummary:
+    """First streaming pass: distinct usernames and their time bounds."""
+    activity: dict[str, UserActivity] = {}
+    valid = 0
     invalid = 0
-    for _source_id, raw_datetime, raw_username, raw_content in rows:
-        sent_at = parse_datetime(raw_datetime)
-        username = str(raw_username or "").strip()
-        content = str(raw_content or "").strip()
-        if sent_at is None or not username or not content:
+    for raw_datetime, raw_username, raw_content in iter_source_rows(path):
+        message = parse_row(raw_datetime, raw_username, raw_content)
+        if message is None:
             invalid += 1
             continue
-        messages.append(ParsedMessage(username, sent_at, content))
-    return messages, invalid
+        valid += 1
+        key = message.username.lower()
+        entry = activity.get(key)
+        if entry is None:
+            activity[key] = UserActivity(
+                message.username, message.sent_at, message.sent_at
+            )
+        else:
+            activity[key] = UserActivity(
+                entry.display_name,
+                min(entry.first, message.sent_at),
+                max(entry.last, message.sent_at),
+            )
+
+    return SourceSummary(
+        usernames=sorted(entry.display_name for entry in activity.values()),
+        activity=activity,
+        valid=valid,
+        invalid=invalid,
+    )
 
 
 def load_user_map(path: Path) -> dict[str, str]:
@@ -144,36 +221,46 @@ async def prompt_user_ids(
     return resolved
 
 
-def message_key(message: ParsedMessage) -> tuple[datetime, str, str]:
-    return (message.sent_at, message.username.lower(), message.content)
+def build_user_activity(
+    summary: SourceSummary, user_map: dict[str, str]
+) -> dict[str, UserActivity]:
+    """Merge per-username activity into one entry per resolved user ID."""
+    by_id: dict[str, UserActivity] = {}
+    # summary.activity keeps first-occurrence order, so the first display name
+    # for a user ID wins, as in the original implementation.
+    for key, entry in summary.activity.items():
+        user_id = user_map[key]
+        current = by_id.get(user_id)
+        if current is None:
+            by_id[user_id] = entry
+        else:
+            by_id[user_id] = UserActivity(
+                current.display_name,
+                min(current.first, entry.first),
+                max(current.last, entry.last),
+            )
+    return by_id
 
 
-def build_rows(
-    messages: Sequence[ParsedMessage],
+def iter_rows(
+    messages: Iterator[ParsedMessage],
     user_map: dict[str, str],
     channel_id: str,
-    existing: set[tuple[datetime, str, str]] | None = None,
-) -> tuple[list[dict[str, Any]], int]:
-    """Build insert payloads, skipping duplicates within the source data."""
-    seen = set(existing or ())
-    rows: list[dict[str, Any]] = []
-    duplicates = 0
+) -> Iterator[dict[str, Any]]:
+    """Yield one insert payload per message.
+
+    Duplicates are intentionally not filtered here: every INSERT is guarded by
+    ``WHERE NOT EXISTS`` inside the same transaction, so duplicates are skipped
+    when the script is applied without holding a set of every message in RAM.
+    """
     for message in messages:
-        key = message_key(message)
-        if key in seen:
-            duplicates += 1
-            continue
-        seen.add(key)
-        rows.append(
-            {
-                "channel_id": channel_id,
-                "user_id": user_map[message.username.lower()],
-                "username": message.username,
-                "content": message.content,
-                "sent_at": message.sent_at,
-            }
-        )
-    return rows, duplicates
+        yield {
+            "channel_id": channel_id,
+            "user_id": user_map[message.username.lower()],
+            "username": message.username,
+            "content": message.content,
+            "sent_at": message.sent_at,
+        }
 
 
 def sql_literal(value: str | None) -> str:
@@ -187,51 +274,39 @@ def timestamp_literal(value: datetime) -> str:
     return sql_literal(value.isoformat())
 
 
-def render_sql(
-    rows: Sequence[dict[str, Any]], channel_id: str, channel_login: str
-) -> str:
-    """Render a complete, idempotent PostgreSQL import script."""
-    lines = [
-        "-- Generated by bot.tools.import_sqlite_logs.",
-        "-- Review before applying. SQLite IDs are intentionally not imported.",
-        "BEGIN;",
-        "",
+def iter_sql_lines(
+    rows: Iterator[dict[str, Any]],
+    channel_id: str,
+    channel_login: str,
+    users: dict[str, UserActivity],
+) -> Iterator[str]:
+    """Yield the import script one line at a time."""
+    yield "-- Generated by bot.tools.import_sqlite_logs."
+    yield "-- Review before applying. SQLite IDs are intentionally not imported."
+    yield "BEGIN;"
+    yield ""
+    yield (
         "INSERT INTO channels (id, login, display_name) "
         f"VALUES ({sql_literal(channel_id)}, {sql_literal(channel_login.lower())}, "
         f"{sql_literal(channel_login)}) "
         "ON CONFLICT (id) DO UPDATE SET "
-        "login = EXCLUDED.login, display_name = EXCLUDED.display_name;",
-        "",
-    ]
+        "login = EXCLUDED.login, display_name = EXCLUDED.display_name;"
+    )
+    yield ""
 
-    by_user: dict[str, dict[str, Any]] = {}
-    for row in rows:
-        user_id = row["user_id"]
-        entry = by_user.get(user_id)
-        if entry is None:
-            entry = {
-                "login": row["username"].lower(),
-                "display_name": row["username"],
-                "first": row["sent_at"],
-                "last": row["sent_at"],
-            }
-            by_user[user_id] = entry
-        else:
-            entry["first"] = min(entry["first"], row["sent_at"])
-            entry["last"] = max(entry["last"], row["sent_at"])
-
-    for user_id in sorted(by_user):
-        entry = by_user[user_id]
-        lines.append(
+    for user_id in sorted(users):
+        entry = users[user_id]
+        yield (
             "INSERT INTO users (id, login, display_name, first_seen_at, last_seen_at) "
-            f"VALUES ({sql_literal(user_id)}, {sql_literal(entry['login'])}, "
-            f"{sql_literal(entry['display_name'])}, "
-            f"{timestamp_literal(entry['first'])}, "
-            f"{timestamp_literal(entry['last'])}) "
+            f"VALUES ({sql_literal(user_id)}, "
+            f"{sql_literal(entry.display_name.lower())}, "
+            f"{sql_literal(entry.display_name)}, "
+            f"{timestamp_literal(entry.first)}, "
+            f"{timestamp_literal(entry.last)}) "
             "ON CONFLICT (id) DO UPDATE SET "
             "login = EXCLUDED.login, display_name = EXCLUDED.display_name;"
         )
-    lines.append("")
+    yield ""
 
     columns = "channel_id, user_id, username, content, sent_at"
     for row in rows:
@@ -253,32 +328,44 @@ def render_sql(
                 f"sent_at = {timestamp_literal(row['sent_at'])}",
             ]
         )
-        lines.append(
+        yield (
             f"INSERT INTO chat_messages ({columns}) "
             f"SELECT {values} "
             f"WHERE NOT EXISTS (SELECT 1 FROM chat_messages WHERE {match});"
         )
 
-    if by_user:
-        user_ids = ", ".join(sql_literal(user_id) for user_id in sorted(by_user))
-        lines.extend(
-            [
-                "",
-                "UPDATE users AS u",
-                "SET first_seen_at = s.first_seen_at, last_seen_at = s.last_seen_at",
-                "FROM (",
-                "    SELECT user_id, MIN(sent_at) AS first_seen_at, "
-                "MAX(sent_at) AS last_seen_at",
-                "    FROM chat_messages",
-                f"    WHERE user_id IN ({user_ids})",
-                "    GROUP BY user_id",
-                ") AS s",
-                "WHERE u.id = s.user_id;",
-            ]
+    if users:
+        user_ids = ", ".join(sql_literal(user_id) for user_id in sorted(users))
+        yield ""
+        yield "UPDATE users AS u"
+        yield "SET first_seen_at = s.first_seen_at, last_seen_at = s.last_seen_at"
+        yield "FROM ("
+        yield (
+            "    SELECT user_id, MIN(sent_at) AS first_seen_at, "
+            "MAX(sent_at) AS last_seen_at"
         )
+        yield "    FROM chat_messages"
+        yield f"    WHERE user_id IN ({user_ids})"
+        yield "    GROUP BY user_id"
+        yield ") AS s"
+        yield "WHERE u.id = s.user_id;"
 
-    lines.extend(["", "COMMIT;", ""])
-    return "\n".join(lines)
+    yield ""
+    yield "COMMIT;"
+    yield ""
+
+
+def write_sql(
+    output: Path,
+    rows: Iterator[dict[str, Any]],
+    channel_id: str,
+    channel_login: str,
+    users: dict[str, UserActivity],
+) -> None:
+    """Stream the import script to disk without holding it in memory."""
+    with output.open("w", encoding="utf-8") as handle:
+        for line in iter_sql_lines(rows, channel_id, channel_login, users):
+            handle.write(line + "\n")
 
 
 async def run(args: argparse.Namespace) -> None:
@@ -286,39 +373,47 @@ async def run(args: argparse.Namespace) -> None:
     user_map_path = Path(args.user_map)
     output = Path(args.output)
 
-    messages, invalid = read_messages(source)
-    usernames = sorted({message.username for message in messages})
-    print(f"Read {len(messages)} valid message(s) from {source}; skipped {invalid}.")
+    summary = summarize_source(source)
+    print(
+        f"Read {summary.valid} valid message(s) from {source}; "
+        f"skipped {summary.invalid}."
+    )
 
     channel_id = await prompt_channel_id(args.channel_id)
     channel_login = args.channel_login or await prompt("Channel login/name: ")
 
     user_map = load_user_map(user_map_path)
-    resolved = await prompt_user_ids(usernames, user_map)
-
-    rows, duplicates = build_rows(messages, resolved, channel_id)
-    sql = render_sql(rows, channel_id, channel_login)
+    resolved = await prompt_user_ids(summary.usernames, user_map)
+    users = build_user_activity(summary, resolved)
 
     if args.dry_run:
-        print(f"DRY RUN: would write {len(rows)} message(s) to {output}.")
-        print(f"Duplicates skipped from source: {duplicates}.")
+        print(f"DRY RUN: would write {summary.valid} message(s) to {output}.")
         print("--- SQL preview ---")
-        print("\n".join(sql.splitlines()[:14]))
+        stream = iter_sql_lines(
+            iter_rows(read_messages(source), resolved, channel_id),
+            channel_id,
+            channel_login,
+            users,
+        )
+        preview = list(itertools.islice(stream, PREVIEW_LINES))
+        stream.close()
+        print("\n".join(preview))
         return
 
-    output.write_text(sql, encoding="utf-8")
+    write_sql(
+        output,
+        iter_rows(read_messages(source), resolved, channel_id),
+        channel_id,
+        channel_login,
+        users,
+    )
     if resolved != user_map:
         save_user_map(user_map_path, resolved)
     print(
-        f"Wrote {output}: {len(rows)} message(s), {len(by_user_ids(rows))} user(s); "
-        f"skipped {duplicates} duplicate(s) from the source. "
+        f"Wrote {output}: {summary.valid} message(s), {len(users)} user(s). "
         "Apply it yourself with: psql \"$DATABASE_URL\" -f "
         f"{output.as_posix()}"
     )
-
-
-def by_user_ids(rows: Sequence[dict[str, Any]]) -> set[str]:
-    return {row["user_id"] for row in rows}
 
 
 def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:

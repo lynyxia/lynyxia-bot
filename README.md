@@ -662,7 +662,9 @@ endpoint/model selection to `ai_chat_channels`.
 `logs.db`; it does **not** write to the database itself. Its source table must
 contain `id`, `datetime`, `username` and `message`; `datetime` is
 `YYYY-MM-DD HH:MM:SS` in UTC. The SQLite `id` is **ignored** and PostgreSQL
-assigns a new one.
+assigns a new one. The file is read in two streaming passes and the SQL is
+written incrementally, so memory use stays bounded even for multi-million-row
+logs.
 
 ```bash
 # Put logs.db in the project root first; it is gitignored.
@@ -686,6 +688,8 @@ The generated script:
 - recomputes `first_seen_at` / `last_seen_at` from the imported messages;
 - guards each message insert with `WHERE NOT EXISTS`, so applying the script
   twice does not duplicate rows (matched on UTC timestamp, username, content).
+  The same guard also skips duplicates present in the source itself, so the
+  tool does not need to hold a set of every message in memory.
 
 The tool needs no database credentials at all — only the SQLite file and your
 answers. Review the generated SQL before running it against PostgreSQL.

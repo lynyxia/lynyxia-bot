@@ -5,7 +5,9 @@ from __future__ import annotations
 import argparse
 import json
 import sqlite3
+from collections.abc import Iterator
 from datetime import UTC, datetime
+from pathlib import Path
 
 import pytest
 
@@ -57,10 +59,46 @@ def test_read_messages_skips_invalid_rows(tmp_path) -> None:
             (4, "2021-08-11 17:26:01", "Other", ""),
         ],
     )
-    messages, invalid = tool.read_messages(path)
+    messages = list(tool.read_messages(path))
+    summary = tool.summarize_source(path)
     assert len(messages) == 1
-    assert invalid == 3
+    assert summary.invalid == 3
+    assert summary.valid == 1
     assert messages[0].username == "Kappa123"
+
+
+def test_read_messages_is_lazy(tmp_path) -> None:
+    path = tmp_path / "logs.db"
+    make_sqlite(path, [(1, "2021-08-11 17:25:54", "Kappa123", "hello")])
+    messages = tool.read_messages(path)
+    assert isinstance(messages, Iterator)
+    assert next(iter(messages)).content == "hello"
+
+
+def test_summarize_source_tracks_time_bounds_per_username(tmp_path) -> None:
+    path = tmp_path / "logs.db"
+    make_sqlite(
+        path,
+        [
+            (1, "2021-08-11 17:25:54", "Alice", "first"),
+            (2, "2021-08-12 17:25:54", "alice", "second"),
+            (3, "2021-08-10 17:25:54", "Bob", "third"),
+        ],
+    )
+    summary = tool.summarize_source(path)
+    assert summary.usernames == ["Alice", "Bob"]
+    assert summary.activity["alice"].display_name == "Alice"
+    assert summary.activity["alice"].first.day == 11
+    assert summary.activity["alice"].last.day == 12
+    assert summary.activity["bob"].first.day == 10
+    assert summary.activity["bob"].last.day == 10
+
+    users = tool.build_user_activity(summary, {"alice": "1", "bob": "1"})
+    assert len(users) == 1
+    entry = users["1"]
+    assert entry.display_name == "Alice"
+    assert entry.first.day == 10
+    assert entry.last.day == 12
 
 
 def test_user_map_roundtrip(tmp_path) -> None:
@@ -82,19 +120,49 @@ async def test_prompt_user_ids_asks_once_per_username(monkeypatch) -> None:
     assert resolved == {"alice": "111", "bob": "222"}
 
 
-def test_build_rows_dedupes_within_and_against_existing() -> None:
+def test_iter_rows_yields_one_payload_per_message() -> None:
     first = tool.ParsedMessage("Alice", datetime(2021, 1, 1, tzinfo=UTC), "hello")
     second = tool.ParsedMessage("Bob", datetime(2021, 1, 2, tzinfo=UTC), "world")
     user_map = {"alice": "1", "bob": "2"}
 
-    rows, duplicates = tool.build_rows([first, first, second], user_map, "7")
-    assert len(rows) == 2
-    assert duplicates == 1
+    rows = list(tool.iter_rows(iter([first, first, second]), user_map, "7"))
+    # Intra-source duplicates are left to the SQL WHERE NOT EXISTS guard.
+    assert len(rows) == 3
+    assert rows[0] == {
+        "channel_id": "7",
+        "user_id": "1",
+        "username": "Alice",
+        "content": "hello",
+        "sent_at": first.sent_at,
+    }
+    assert rows[2]["user_id"] == "2"
 
-    existing = {(first.sent_at, "alice", "hello")}
-    rows, duplicates = tool.build_rows([first, second], user_map, "7", existing)
-    assert len(rows) == 1
-    assert duplicates == 1
+
+def test_write_sql_streams_partial_output_on_failure(tmp_path) -> None:
+    output: Path = tmp_path / "partial.sql"
+    sent_at = datetime(2021, 1, 1, tzinfo=UTC)
+    row = {
+        "channel_id": "7",
+        "user_id": "42",
+        "username": "Alice",
+        "content": "hello",
+        "sent_at": sent_at,
+    }
+
+    def rows() -> Iterator[dict]:
+        yield row
+        yield row
+        raise RuntimeError("source failed mid-stream")
+
+    users = {"42": tool.UserActivity("Alice", sent_at, sent_at)}
+    with pytest.raises(RuntimeError, match="mid-stream"):
+        tool.write_sql(output, rows(), "7", "channel", users)
+
+    # Earlier lines reach disk before the failure; no all-at-once string join.
+    text = output.read_text(encoding="utf-8")
+    assert "BEGIN;" in text
+    assert text.count("INSERT INTO chat_messages") == 2
+    assert "COMMIT;" not in text
 
 
 async def test_dry_run_does_not_write(tmp_path, capsys) -> None:
