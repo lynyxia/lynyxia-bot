@@ -239,6 +239,7 @@ class Settings(BaseSettings):
             "lynyxia",
             "livepass",
             "trivia",
+            "pyramid",
         ]
     )
     admin_user_ids: list[str] = Field(default_factory=list)

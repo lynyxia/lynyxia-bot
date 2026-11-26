@@ -35,6 +35,7 @@ def test_discovery_finds_foundation_modules(settings) -> None:
         "lynyxia",
         "livepass",
         "trivia",
+        "pyramid",
     }
 
 

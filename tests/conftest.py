@@ -39,6 +39,7 @@ def settings() -> Settings:
             "lynyxia",
             "livepass",
             "trivia",
+            "pyramid",
         ],
         admin_user_ids=["42"],
     )

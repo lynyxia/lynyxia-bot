@@ -30,6 +30,7 @@ src/bot/
 │   ├── lynxia/              # !lynyxia per-channel output toggle
 │   ├── quotes/              # !rq commands
 │   ├── trivia/              # !trivia/!hint/!pass, JSON category files
+│   ├── pyramid/             # passive emote-pyramid watcher
 │   └── <feature>/           # one Module subclass per package
 ├── services/
 │   ├── database.py          # engine, session factory, pooling, retry
@@ -238,6 +239,7 @@ BOT_MODULE__CHAT_LOGGER='{"batch_size":100,"flush_interval_seconds":2,"queue_max
 BOT_MODULE__ECOUNT='{"default_days":365,"max_days":3650}'
 BOT_MODULE__LINES='{"date_format":"%Y-%m-%d %H:%M:%S"}'
 BOT_MODULE__TRIVIA='{"directory":"trivia","timeout_seconds":60,"hint_delay_seconds":10,"similarity_threshold":0.9}'
+BOT_MODULE__PYRAMID='{"enabled":true}'
 ```
 
 Modules read it via `self.context.config` and validate it with their own
@@ -502,6 +504,42 @@ same normalization is applied to guesses, so typing `Andr&eacute;s` also works.
 Sessions are per channel, time out via async timers, and all output passes
 through the shared send queue and the per-channel output gate.
 
+### Pyramid watcher
+
+The passive `pyramid` module watches for emote pyramids — repeated copies of a
+single emote forming widths `1, 2, ..., W` and back down to `1`, one line per
+message — and posts one reaction when the pyramid finishes:
+
+| Peak width | Reaction |
+| --- | --- |
+| 3–4 | `That's not a pyramid, surely you can do better!` |
+| 5–7 | `Tiny pyramid detected. The Pharaoh is disappointed, <user>.` |
+| 8–11 | `A respectable pyramid. Somewhere, an archaeologist just smiled, <user>.` |
+| 12–15 | `Now THAT'S a pyramid! The Egyptians would be proud, <user>.` |
+| 16–24 | `Now that's a BIG pyramid! The Pharaoh is considering giving you a promotion. 👑` |
+| 25+ | `HOLY PYRAMIDS!!! We found the eighth wonder of the world!!!.` |
+
+Rules:
+
+- A line counts only if the **whole message** is whitespace-separated copies
+  of the **same** token; matching is case-sensitive (`Kappa` ≠ `kappa`).
+- The pyramid must start at width 1 and descend all the way back to 1. The
+  reaction fires on the final line; `width` is the peak.
+- Other people may contribute in the middle. It only counts as **stolen** when
+  the *last* line is from a different user (by Twitch ID) than the *first*:
+  `SipTime Well that was rude! <thief> just stole a <width> pyramid from <user>!`
+- A deviation **on the way up** resets the candidate silently. Only a
+  deviation **after the peak** produces
+  `FailFish The pyramid has collapsed thanks to <user>! You have been cursed.`
+- A 1-wide line never collapses a pyramid: it either completes the descent or
+  quietly starts a new candidate. Pyramids below width 3 get no reaction.
+- State is per channel and in memory; there is no time window or width cap —
+  a breaking message resets the candidate.
+- There are no commands. Reactions go through the shared send queue, so
+  blocklist and `!lynyxia` still apply, and they are suppressed while the
+  channel is live. `BOT_MODULE__PYRAMID='{"enabled":false}'` disables it
+  without editing `BOT_ENABLED_MODULES`.
+
 ---
 
 ## 6. Starting the application with Docker Compose
@@ -755,6 +793,12 @@ supported in this milestone.
 - `!trivia`/`!hint`/`!pass` with per-channel sessions and async timeout timers
 - JSON category files supplied through the read-only `./trivia` volume
 - All question/answer text is HTML-unescaped before appearing in chat
+
+**Milestone 12 — pyramid watcher (done)**
+
+- Pure, unit-tested detector state machine with per-channel candidates
+- Tiered completion reactions, theft detection and post-peak collapse curses
+- Live-mode suppression and all existing send-safety gates
 
 **Explicitly deferred to later milestones**
 

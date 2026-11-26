@@ -125,6 +125,7 @@ def test_defaults_include_all_foundations_modules(settings) -> None:
         "lynyxia",
         "livepass",
         "trivia",
+        "pyramid",
     ]
 
 
