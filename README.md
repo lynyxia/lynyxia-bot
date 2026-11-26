@@ -55,6 +55,10 @@ src/bot/
   TwitchIO objects. This makes modules easy to test without Twitch. *Trade-off:*
   we reimplement simple `!command` prefix parsing instead of using TwitchIO's
   decorator command system.
+- **Incoming text is sanitized once at the boundary.** `core/bot.py` removes
+  every U+E0000 character (Chatterino's anti-deduplication marker) before
+  building `ChatMessageEvent` or `CommandContext`, so modules, commands and
+  logs only ever see clean text.
 - **Discovery walks packages recursively**, so a feature's `Module` subclass
   may live in a submodule (e.g. `chat_logger/module.py`) while its package
   `__init__.py` re-exports it.

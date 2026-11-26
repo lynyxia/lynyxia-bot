@@ -146,7 +146,7 @@ class BotClient(commands.Bot):
         it must be skipped when deciding whether the message *starts* with a
         mention of the bot.
         """
-        text = content.lstrip().lstrip("\U000e0000").lstrip()
+        text = content.lstrip()
         if getattr(message, "reply", None) is None:
             return text
 
@@ -404,6 +404,11 @@ class BotClient(commands.Bot):
             message, "channel", None
         )
         content = getattr(message, "text", None) or getattr(message, "content", "") or ""
+        # Chatterino inserts U+E0000 into messages to get around Twitch's
+        # unique-message limit. It has no meaning outside that, so strip every
+        # occurrence here: this is the single chat-ingestion boundary, so no
+        # module ever sees the character (events, commands or logs).
+        content = str(content).replace("\U000e0000", "")
 
         sent_at = as_utc(getattr(message, "timestamp", None))
 

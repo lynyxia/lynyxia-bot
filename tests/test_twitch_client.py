@@ -357,6 +357,50 @@ async def test_message_event_is_normalized_for_modules(settings) -> None:
     assert isinstance(event.raw, Message)
 
 
+async def test_chatterino_character_is_stripped_before_modules(settings) -> None:
+    router = EventRouter()
+    seen_events: list[ChatMessageEvent] = []
+    seen_commands: list[CommandContext] = []
+
+    async def on_message(event: ChatMessageEvent) -> None:
+        seen_events.append(event)
+
+    async def on_ping(ctx: CommandContext) -> None:
+        seen_commands.append(ctx)
+
+    async def on_chat(ctx: CommandContext) -> None:
+        seen_commands.append(ctx)
+
+    router.on_event("message", on_message)
+    router.on_command("ping", on_ping)
+    router.on_command("chat", on_chat)
+    bot = make_bot(settings, router)
+
+    class Message:
+        # U+E0000 can appear at the start, middle and end of a message.
+        text = "\U000e0000!pin\U000e0000g extra\U000e0000"
+        id = "msg-1"
+        timestamp = None
+        chatter = SimpleNamespace(id="99", name="chatter", display_name="Chatter")
+        broadcaster = SimpleNamespace(id="7", name="channel", display_name="Channel")
+
+    await bot.event_message(Message())
+
+    assert seen_events[0].content == "!ping extra"
+    assert seen_commands[0].command == "ping"
+    assert seen_commands[0].args == ["extra"]
+    assert seen_commands[0].content == "!ping extra"
+
+    class Mention(Message):
+        text = "@testbot\U000e0000 question?"
+
+    await bot.event_message(Mention())
+
+    assert seen_events[1].content == "@testbot question?"
+    assert seen_commands[1].command == "chat"
+    assert seen_commands[1].args == ["@testbot", "question?"]
+
+
 async def test_message_timestamp_is_normalized_to_utc(settings) -> None:
     router = EventRouter()
     seen: list[ChatMessageEvent] = []

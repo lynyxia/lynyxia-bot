@@ -194,7 +194,7 @@ class TriviaModule(Module):
     async def on_message(self, event: ChatMessageEvent) -> None:
         if not event.content or event.content.startswith("!"):
             return
-        text = event.content.lstrip().lstrip("\U000e0000").lstrip()
+        text = event.content.lstrip()
         bot_login = self.context.settings.twitch.bot_username
         if bot_login and re.match(
             rf"@({re.escape(bot_login)})\b", text, flags=re.IGNORECASE

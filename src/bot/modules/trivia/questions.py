@@ -55,7 +55,7 @@ def normalize_category(value: str) -> str:
 
 def normalize_answer(value: object) -> str:
     """HTML-unescape, drop wrapping quotes/markup and case-fold an answer."""
-    text = unescape(str(value)).strip().strip("\U000e0000").strip()
+    text = unescape(str(value)).strip()
     # Entities may themselves decode to quote characters, so peel wrappers
     # repeatedly (e.g. '"&quot;Name&quot;"' -> '"Name"' -> 'Name').
     while len(text) >= 2 and text[0] == text[-1] and text[0] in ('"', "'"):
