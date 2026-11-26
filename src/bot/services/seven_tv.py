@@ -1,4 +1,4 @@
-"""Small async client for the parts of the 7TV v3 API we need."""
+"""Small async client for the 7TV v3 API used by the report modules."""
 
 from __future__ import annotations
 
@@ -49,12 +49,47 @@ class SevenTVClient:
         value = data.get("emote_set_id") if isinstance(data, dict) else None
         return str(value) if value else None
 
-    async def active_emotes(self, emote_set_id: str) -> list[dict]:
-        """Return the emote objects in an emote set."""
+    async def owned_emote_sets(self, twitch_id: str) -> list[dict]:
+        """Return ``{id, name}`` for the emote sets the channel owns."""
+        data = await self._get_json(f"/users/twitch/{quote(twitch_id, safe='')}")
+        if not isinstance(data, dict):
+            return []
+        user = data.get("user", data)
+        entries = user.get("emote_sets") if isinstance(user, dict) else None
+        if not isinstance(entries, list):
+            return []
+        sets: list[dict] = []
+        for entry in entries:
+            if not isinstance(entry, dict):
+                continue
+            set_id = str(entry.get("id") or "")
+            name = str(entry.get("name") or "")
+            if set_id and name:
+                sets.append({"id": set_id, "name": name})
+        return sets
+
+    async def emote_set(self, emote_set_id: str) -> dict:
+        """Return a normalized ``{id, name, emotes}`` object for one set."""
         data = await self._get_json(
             f"/emote-sets/{quote(emote_set_id, safe='')}"
         )
-        emotes = data.get("emotes") if isinstance(data, dict) else None
-        if not isinstance(emotes, list):
-            return []
-        return [entry for entry in emotes if isinstance(entry, dict)]
+        if not isinstance(data, dict):
+            return {}
+        # Some payloads nest the set under "emote_set"; accept both shapes.
+        nested = data.get("emote_set")
+        if isinstance(nested, dict):
+            data = nested
+        emotes = data.get("emotes")
+        return {
+            "id": str(data.get("id") or emote_set_id),
+            "name": str(data.get("name") or ""),
+            "emotes": (
+                [entry for entry in emotes if isinstance(entry, dict)]
+                if isinstance(emotes, list)
+                else []
+            ),
+        }
+
+    async def active_emotes(self, emote_set_id: str) -> list[dict]:
+        """Return the emote objects in an emote set."""
+        return (await self.emote_set(emote_set_id))["emotes"]

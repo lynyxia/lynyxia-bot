@@ -41,6 +41,7 @@ def settings() -> Settings:
             "trivia",
             "pyramid",
             "unused_emotes",
+            "emote_sets",
         ],
         admin_user_ids=["42"],
     )

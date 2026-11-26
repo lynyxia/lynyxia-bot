@@ -32,6 +32,7 @@ src/bot/
 │   ├── trivia/              # !trivia/!hint/!pass, JSON category files
 │   ├── pyramid/             # passive emote-pyramid watcher
 │   ├── unused_emotes/       # !unusedemotes 7TV HTML reports
+│   ├── emote_sets/          # !emotesets 7TV set comparison reports
 │   └── <feature>/           # one Module subclass per package
 ├── services/
 │   ├── database.py          # engine, session factory, pooling, retry
@@ -228,6 +229,7 @@ All variables are read in `src/bot/config.py`. Nested settings use `__`.
 | `BOT_CHAT__MAX_RETRIES`, `BOT_CHAT__BACKOFF_BASE_SECONDS` | 429 retry/backoff settings |
 | `BOT_CHAT__BANNED_PHRASES` | JSON array of case-insensitive whole-word phrases to filter |
 | `BOT_CHAT__BANNED_PHRASE_REPLACEMENT` | Text sent instead of a message containing a banned phrase |
+| `BOT_REPORTS` | Shared report settings (`url_prefix`, `reports_dir`, `api_base`, `timeout_seconds`) |
 | `BOT_ENABLED_MODULES` | JSON list of module names to load |
 | `BOT_ADMIN_USER_IDS` | JSON list of admin Twitch user IDs |
 | `BOT_MODULE__<NAME>` | JSON object with that module's own config |
@@ -241,7 +243,9 @@ BOT_MODULE__ECOUNT='{"default_days":365,"max_days":3650}'
 BOT_MODULE__LINES='{"date_format":"%Y-%m-%d %H:%M:%S"}'
 BOT_MODULE__TRIVIA='{"directory":"trivia","timeout_seconds":60,"hint_delay_seconds":10,"similarity_threshold":0.9}'
 BOT_MODULE__PYRAMID='{"enabled":true}'
-BOT_MODULE__UNUSED_EMOTES='{"url_prefix":"https://reports.example.com","default_cutoff":"365d","default_threshold":10}'
+BOT_REPORTS='{"url_prefix":"https://reports.example.com","reports_dir":"reports"}'
+BOT_MODULE__UNUSED_EMOTES='{"default_cutoff":"365d","default_threshold":10}'
+BOT_MODULE__EMOTE_SETS='{"filename":"emotesets.html","max_sets":10}'
 ```
 
 Modules read it via `self.context.config` and validate it with their own
@@ -566,16 +570,35 @@ file is replaced atomically, and one report per channel can run at a time.
 7TV emote names, image URLs and the channel name are HTML-escaped before they
 reach the report.
 
-Set the public prefix in `.env` (no trailing slash needed):
+The public prefix is shared with `!emotesets` in `.env` (no trailing slash
+needed):
 
 ```bash
-BOT_MODULE__UNUSED_EMOTES='{"url_prefix":"https://reports.example.com"}'
+BOT_REPORTS='{"url_prefix":"https://reports.example.com"}'
 ```
 
 The completion message is `Report generated, view at {url}/{channel}/
 unusedemotes.html`, with `{url}` replaced by that prefix and `{channel}` by the
 requesting channel's configured Twitch login. If no prefix is configured the
 command replies `Report URL is not configured.` without generating a file.
+
+### Emote set comparison report
+
+`!emotesets` takes no arguments and is restricted to **bot admins and the
+channel owner**. It compares the channel's owned 7TV emote sets (from
+`user.emote_sets`) pairwise, listing emotes present in one set but missing from
+the other in two side-by-side columns. Emote details (`Animated`, tag count or
+`Static`) are included, and every dynamic value in the HTML is escaped.
+
+Sets are sorted by name and capped at `max_sets` (default 10) to keep the
+pairwise comparison bounded; a note appears in the report when the list was
+truncated. Fewer than two owned sets produces the reply `Fewer than two 7TV
+emote sets found.` and no file.
+
+The report is written to `reports/<channel-login>/emotesets.html`, using the
+same writable `./reports` mount and shared `BOT_REPORTS` URL prefix as
+`!unusedemotes`. The two report types have separate in-flight locks, so they
+can run in parallel in the same channel.
 
 ---
 
@@ -842,6 +865,12 @@ supported in this milestone.
 - Admin/owner-only `!unusedemotes` with strict cutoff and threshold arguments
 - Async 7TV lookups, per-channel HTML reports on a writable Docker mount
 - HTML escaping, URL-safe channel folders and in-flight deduplication
+
+**Milestone 14 — emote set reports (done)**
+
+- Admin/owner-only `!emotesets` comparing owned 7TV sets pairwise
+- Shared `BOT_REPORTS` config and report services used by both commands
+- Capped set count, escaped HTML and per-report-type in-flight locks
 
 **Explicitly deferred to later milestones**
 

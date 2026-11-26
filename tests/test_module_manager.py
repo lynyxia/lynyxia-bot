@@ -37,6 +37,7 @@ def test_discovery_finds_foundation_modules(settings) -> None:
         "trivia",
         "pyramid",
         "unused_emotes",
+        "emote_sets",
     }
 
 

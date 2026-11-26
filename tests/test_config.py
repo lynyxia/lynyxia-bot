@@ -6,6 +6,7 @@ from bot.config import (
     LiveSettings,
     LLMEndpoint,
     LLMSettings,
+    ReportSettings,
     Settings,
     TwitchSettings,
 )
@@ -127,7 +128,16 @@ def test_defaults_include_all_foundations_modules(settings) -> None:
         "trivia",
         "pyramid",
         "unused_emotes",
+        "emote_sets",
     ]
+
+
+def test_report_settings_normalize_url_prefix() -> None:
+    reports = ReportSettings(url_prefix=" https://reports.example.com/ ")
+    assert reports.url_prefix == "https://reports.example.com"
+    assert reports.reports_dir == "reports"
+    with pytest.raises(ValidationError):
+        ReportSettings(url_prefix="reports.example.com")
 
 
 def test_live_gate_defaults_and_list_normalization() -> None:

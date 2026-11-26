@@ -2,15 +2,13 @@
 
 Only bot admins and the channel owner may run it (others are ignored). The
 report is written to ``reports/<channel-login>/unusedemotes.html`` on a host
-volume; the chat reply uses a public URL prefix from the module config.
+volume; the chat reply uses the public URL prefix from ``BOT_REPORTS``.
 """
 
 from __future__ import annotations
 
 import asyncio
-import re
 from datetime import datetime
-from pathlib import Path
 
 import httpx
 
@@ -25,11 +23,16 @@ from bot.modules.unused_emotes.report import (
     parse_threshold,
     render_report,
 )
-from bot.modules.unused_emotes.seven_tv import SevenTVClient
+from bot.services.reporting import (
+    ReportCoordinator,
+    channel_login,
+    is_report_admin,
+    report_link,
+    write_report,
+)
+from bot.services.seven_tv import SevenTVClient
 
 USAGE = "Usage: !unusedemotes [cutoff] [threshold] (e.g. 6m 10)."
-SAFE_LOGIN = re.compile(r"[A-Za-z0-9_]{1,32}")
-REPORT_MESSAGE = "Report generated, view at {url}/{channel}/unusedemotes.html"
 MAX_CONCURRENT_COUNTS = 8
 
 
@@ -39,17 +42,17 @@ class UnusedEmotesModule(Module):
     def __init__(self, context: ModuleContext) -> None:
         super().__init__(context)
         self.config = UnusedEmotesConfig.model_validate(context.config)
+        self._reports = context.settings.reports
         self._messages: ChatMessageRepository | None = None
         self._http: SevenTVClient | None = None
         self._client: httpx.AsyncClient | None = None
-        self._inflight: set[str] = set()
-        self._lock = asyncio.Lock()
+        self._coordinator = ReportCoordinator()
 
     async def setup(self) -> None:
         self._messages = ChatMessageRepository(self.context.services.database)
-        self._client = httpx.AsyncClient(timeout=self.config.timeout_seconds)
+        self._client = httpx.AsyncClient(timeout=self._reports.timeout_seconds)
         self._http = SevenTVClient(
-            self.config.api_base, self.config.timeout_seconds, client=self._client
+            self._reports.api_base, self._reports.timeout_seconds, client=self._client
         )
         self.subscribe(
             self.context.router.on_command("unusedemotes", self.on_unusedemotes)
@@ -61,18 +64,8 @@ class UnusedEmotesModule(Module):
             self._client = None
         await super().stop()
 
-    def _login_for(self, channel_id: str) -> str | None:
-        twitch = self.context.settings.twitch
-        for known_id, login in zip(
-            twitch.channel_id, twitch.channel, strict=False
-        ):
-            if known_id == channel_id:
-                return login
-        return None
-
     async def on_unusedemotes(self, ctx: CommandContext) -> None:
-        permissions = self.context.services.permissions
-        if permissions is None or not permissions.can_manage_channel(ctx):
+        if not is_report_admin(self.context.services.permissions, ctx):
             # Stay quiet for unauthorized users, like the other control commands.
             self.log.info(
                 "Ignoring !unusedemotes from unauthorized user %s in channel %s",
@@ -81,7 +74,7 @@ class UnusedEmotesModule(Module):
             )
             return
 
-        if not self.config.url_prefix:
+        if not self._reports.url_prefix:
             await ctx.reply("Report URL is not configured.")
             return
 
@@ -104,18 +97,15 @@ class UnusedEmotesModule(Module):
             await ctx.reply(USAGE)
             return
 
-        login = self._login_for(ctx.channel_id)
-        if login is None or SAFE_LOGIN.fullmatch(login) is None:
+        login = channel_login(self.context.settings, ctx.channel_id)
+        if login is None:
             await ctx.reply("No report channel is configured for this channel ID.")
             return
 
-        async with self._lock:
-            if ctx.channel_id in self._inflight:
-                await ctx.reply(
-                    "A report is already being generated for this channel."
-                )
-                return
-            self._inflight.add(ctx.channel_id)
+        key = f"unusedemotes:{ctx.channel_id}"
+        if not await self._coordinator.claim(key):
+            await ctx.reply("A report is already being generated for this channel.")
+            return
 
         try:
             await ctx.reply(
@@ -129,8 +119,7 @@ class UnusedEmotesModule(Module):
             )
             await ctx.reply("Error generating report.")
         finally:
-            async with self._lock:
-                self._inflight.discard(ctx.channel_id)
+            await self._coordinator.release(key)
 
     async def _generate(
         self, ctx: CommandContext, login: str, since: datetime, threshold: int
@@ -165,16 +154,9 @@ class UnusedEmotesModule(Module):
         report = render_report(
             under_threshold, len(emotes), since, threshold, login
         )
-        await asyncio.to_thread(self._write_report, login, report)
-
-        await ctx.reply(
-            REPORT_MESSAGE.format(url=self.config.url_prefix, channel=login)
+        await asyncio.to_thread(
+            write_report, self._reports.reports_dir, login, self.config.filename, report
         )
 
-    def _write_report(self, login: str, report: str) -> None:
-        directory = Path(self.config.reports_dir) / login
-        directory.mkdir(parents=True, exist_ok=True)
-        target = directory / self.config.filename
-        temporary = target.with_name(target.name + ".tmp")
-        temporary.write_text(report, encoding="utf-8")
-        temporary.replace(target)
+        link = report_link(self._reports.url_prefix, login, self.config.filename)
+        await ctx.reply(f"Report generated, view at {link}")

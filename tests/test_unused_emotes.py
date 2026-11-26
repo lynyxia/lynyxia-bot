@@ -21,8 +21,8 @@ from bot.modules.unused_emotes.report import (
     parse_threshold,
     render_report,
 )
-from bot.modules.unused_emotes.seven_tv import SevenTVClient, SevenTVError
 from bot.services import Services
+from bot.services.seven_tv import SevenTVClient, SevenTVError
 
 EMOTES = [
     {"id": "abc", "name": "Kappa", "host": {
@@ -37,14 +37,11 @@ EMOTES = [
 
 
 def test_config_normalizes_and_validates() -> None:
-    config = UnusedEmotesConfig(url_prefix="https://reports.example.com/")
-    assert config.url_prefix == "https://reports.example.com"
+    config = UnusedEmotesConfig()
     assert config.default_cutoff == "365d"
     assert config.default_threshold == 10
-    assert config.reports_dir == "reports"
+    assert config.filename == "unusedemotes.html"
 
-    with pytest.raises(ValidationError):
-        UnusedEmotesConfig(url_prefix="reports.example.com")
     with pytest.raises(ValidationError):
         UnusedEmotesConfig(default_cutoff="forever")
     with pytest.raises(ValidationError):
@@ -125,7 +122,7 @@ async def test_seven_tv_client_resolves_set_and_emotes(monkeypatch) -> None:
     async def no_sleep(_: float) -> None:
         return None
 
-    monkeypatch.setattr("bot.modules.unused_emotes.seven_tv.asyncio.sleep", no_sleep)
+    monkeypatch.setattr("bot.services.seven_tv.asyncio.sleep", no_sleep)
     attempts = 0
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -151,7 +148,7 @@ async def test_seven_tv_client_wraps_failures(monkeypatch) -> None:
     async def no_sleep(_: float) -> None:
         return None
 
-    monkeypatch.setattr("bot.modules.unused_emotes.seven_tv.asyncio.sleep", no_sleep)
+    monkeypatch.setattr("bot.services.seven_tv.asyncio.sleep", no_sleep)
     transport = httpx.MockTransport(lambda _: httpx.Response(500))
     async with httpx.AsyncClient(transport=transport) as client:
         api = SevenTVClient("https://7tv.io/v3", 5, client=client)
@@ -217,18 +214,25 @@ def make_ctx(
     return ctx, replies
 
 
-def make_module(settings, tmp_path, *, config=None, admin: bool = True):
+def make_module(
+    settings,
+    tmp_path,
+    *,
+    config=None,
+    admin: bool = True,
+    url_prefix: str = "https://reports.example.com",
+):
     permissions = PermissionService(["42"] if admin else [])
+    reports = settings.reports.model_copy(
+        update={"url_prefix": url_prefix, "reports_dir": str(tmp_path)}
+    )
+    local_settings = settings.model_copy(update={"reports": reports})
     context = type(
         "Context",
         (),
         {
-            "settings": settings,
-            "config": {
-                "url_prefix": "https://reports.example.com",
-                "reports_dir": str(tmp_path),
-                **(config or {}),
-            },
+            "settings": local_settings,
+            "config": config or {},
             "router": EventRouter(),
             "services": Services(database=object(), permissions=permissions),
             "log": logging.getLogger("test.unusedemotes"),
@@ -318,7 +322,7 @@ async def test_invalid_arguments_reply_with_usage(settings, tmp_path, args) -> N
 
 
 async def test_missing_url_prefix_is_reported_before_generation(settings, tmp_path) -> None:
-    module = make_module(settings, tmp_path, config={"url_prefix": ""})
+    module = make_module(settings, tmp_path, url_prefix="")
     await prepare(module, FakeSevenTV())
     ctx, replies = make_ctx()
 

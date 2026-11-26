@@ -194,6 +194,31 @@ class ChatSettings(BaseModel):
         return sorted(phrases)
 
 
+class ReportSettings(BaseModel):
+    """Settings shared by the HTML report modules (unused emotes, emote sets)."""
+
+    # Public prefix used to turn report paths into clickable chat links.
+    url_prefix: str = ""
+    # Relative to /app in Docker; the compose mount makes it visible on the host.
+    reports_dir: str = "reports"
+    api_base: str = "https://7tv.io/v3"
+    timeout_seconds: float = Field(default=30.0, ge=1.0, le=120.0)
+
+    @field_validator("url_prefix", "reports_dir", "api_base", mode="before")
+    @classmethod
+    def _strip(cls, value: object) -> object:
+        return value.strip() if isinstance(value, str) else value
+
+    @field_validator("url_prefix", "api_base")
+    @classmethod
+    def _validate_url(cls, value: str) -> str:
+        if not value:
+            return value
+        if not value.startswith(("http://", "https://")):
+            raise ValueError("URL must start with http:// or https://")
+        return value.rstrip("/")
+
+
 class LiveSettings(BaseModel):
     """Per-channel live-mode restriction settings."""
 
@@ -229,6 +254,7 @@ class Settings(BaseSettings):
     logging: LoggingSettings = Field(default_factory=LoggingSettings)
     chat: ChatSettings = Field(default_factory=ChatSettings)
     live: LiveSettings = Field(default_factory=LiveSettings)
+    reports: ReportSettings = Field(default_factory=ReportSettings)
     enabled_modules: list[str] = Field(
         default_factory=lambda: [
             "chat_logger",
@@ -241,6 +267,7 @@ class Settings(BaseSettings):
             "trivia",
             "pyramid",
             "unused_emotes",
+            "emote_sets",
         ]
     )
     admin_user_ids: list[str] = Field(default_factory=list)
