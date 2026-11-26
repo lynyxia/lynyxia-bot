@@ -248,7 +248,9 @@ already in the environment.
 The logger enqueues normalized `ChatMessageEvent`s in `on_message()` and a
 single background worker writes batches. Channel/user rows are upserted in the
 same transaction, and duplicate Twitch message IDs are ignored. Each message
-stores both the stable Twitch `user_id` and the chatter's `username`. All
+stores both the stable Twitch `user_id` and the chatter's `username`, recorded
+with the display-name capitalization Twitch supplied (matching
+`users.display_name`; the lowercase login is only a fallback). All
 timestamps are normalized to UTC before insertion, and every pooled database
 connection uses the UTC session timezone. On shutdown the queue is drained
 before the worker exits.

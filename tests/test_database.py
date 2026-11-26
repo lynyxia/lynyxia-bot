@@ -164,7 +164,7 @@ async def test_repository_roundtrip() -> None:
         assert inserted == 3
         batch_message = await repository.get_random("8")
         assert batch_message is not None
-        assert batch_message.username == "batchuser"
+        assert batch_message.username == "Batch User"
         assert batch_message.sent_at is not None
         assert batch_message.sent_at.utcoffset() == timedelta(0)
 

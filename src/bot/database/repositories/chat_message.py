@@ -14,6 +14,25 @@ from bot.database.repositories.base import BaseRepository
 from bot.utils.time import as_utc
 
 
+def _message_row(event: ChatMessageEvent) -> dict[str, object] | None:
+    """Build one insert row; return ``None`` for events lacking required IDs."""
+    if not event.channel_id or not event.author_id:
+        return None
+    # Store the chatter's display-name capitalization, matching users.display_name
+    # (which is populated from the same event). Fall back to the login only when
+    # Twitch did not supply a display name.
+    row: dict[str, object] = {
+        "channel_id": event.channel_id,
+        "user_id": event.author_id,
+        "username": event.author_name or event.author_login,
+        "content": event.content,
+        "twitch_message_id": event.message_id,
+    }
+    if event.sent_at is not None:
+        row["sent_at"] = as_utc(event.sent_at)
+    return row
+
+
 class ChatMessageRepository(BaseRepository):
     async def add(
         self,
@@ -106,18 +125,9 @@ class ChatMessageRepository(BaseRepository):
 
             rows: list[dict[str, object]] = []
             for event in events:
-                if not event.channel_id or not event.author_id:
-                    continue
-                row: dict[str, object] = {
-                    "channel_id": event.channel_id,
-                    "user_id": event.author_id,
-                    "username": event.author_login or event.author_name,
-                    "content": event.content,
-                    "twitch_message_id": event.message_id,
-                }
-                if event.sent_at is not None:
-                    row["sent_at"] = as_utc(event.sent_at)
-                rows.append(row)
+                row = _message_row(event)
+                if row is not None:
+                    rows.append(row)
 
             if not rows:
                 await session.commit()
