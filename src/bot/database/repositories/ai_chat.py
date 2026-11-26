@@ -29,6 +29,26 @@ class AiChatChannelRepository(BaseRepository):
             )
             await session.commit()
 
+    async def set_model(self, channel_id: str, endpoint: str, model: str) -> None:
+        """Select the endpoint/model for a channel without touching its persona."""
+        async with self.database.session() as session:
+            # persona is NOT NULL with no server default; a fresh row needs a
+            # placeholder. The module falls back to its default persona when the
+            # stored name is not among the loaded ones.
+            stmt = pg_insert(AiChatChannel).values(
+                channel_id=channel_id,
+                persona="",
+                endpoint=endpoint,
+                model=model,
+            )
+            await session.execute(
+                stmt.on_conflict_do_update(
+                    index_elements=["channel_id"],
+                    set_={"endpoint": endpoint, "model": model},
+                )
+            )
+            await session.commit()
+
 
 class AiChatAllowlistRepository(BaseRepository):
     async def add(self, channel_id: str, user_id: str, login: str) -> None:

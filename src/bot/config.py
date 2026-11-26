@@ -7,6 +7,7 @@ Secrets are typed as ``SecretStr`` so they are redacted in reprs and logs.
 
 from __future__ import annotations
 
+import re
 from typing import Any
 
 from pydantic import BaseModel, Field, SecretStr, field_validator, model_validator
@@ -104,13 +105,69 @@ class DatabaseSettings(BaseModel):
         )
 
 
+class LLMEndpoint(BaseModel):
+    """A named OpenAI-compatible endpoint and its optional default model."""
+
+    base_url: str = Field(min_length=1)
+    api_key: SecretStr
+    default_model: str | None = None
+
+    @field_validator("base_url")
+    @classmethod
+    def _validate_base_url(cls, value: str) -> str:
+        if not value.startswith(("http://", "https://")):
+            raise ValueError("LLM base_url must be an http(s) URL")
+        return value.rstrip("/")
+
+    @field_validator("default_model")
+    @classmethod
+    def _normalize_model(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        stripped = value.strip()
+        if not stripped:
+            return None
+        if not re.fullmatch(r"[A-Za-z0-9._:/-]{1,128}", stripped):
+            raise ValueError("Invalid default_model name")
+        return stripped
+
+
 class LLMSettings(BaseModel):
-    provider: str = "openai"
-    api_key: SecretStr | None = None
-    base_url: str | None = None
-    model: str = "gpt-4o-mini"
+    endpoints: dict[str, LLMEndpoint] = Field(default_factory=dict)
+    default_endpoint: str | None = None
     timeout_seconds: float = 30.0
     max_response_chars: int = 500
+
+    @field_validator("endpoints", mode="before")
+    @classmethod
+    def _normalize_endpoints(cls, value: object) -> object:
+        if not isinstance(value, dict):
+            return value
+        normalized: dict[str, object] = {}
+        for name, endpoint in value.items():
+            key = str(name).strip().lower()
+            if not re.fullmatch(r"[a-z0-9_-]{1,64}", key):
+                raise ValueError(
+                    "LLM endpoint names must contain only letters, digits, '_' or '-'"
+                )
+            normalized[key] = endpoint
+        return normalized
+
+    @field_validator("default_endpoint")
+    @classmethod
+    def _normalize_default(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        stripped = value.strip().lower()
+        return stripped or None
+
+    @model_validator(mode="after")
+    def _check_default_endpoint(self) -> LLMSettings:
+        if self.default_endpoint is not None and self.default_endpoint not in self.endpoints:
+            raise ValueError("BOT_LLM__DEFAULT_ENDPOINT must name a configured endpoint")
+        if self.endpoints and self.default_endpoint is None:
+            self.default_endpoint = next(iter(self.endpoints))
+        return self
 
 
 class ChatSettings(BaseModel):

@@ -17,6 +17,8 @@ class AiChatChannel(Base):
 
     channel_id: Mapped[str] = mapped_column(String(32), primary_key=True)
     persona: Mapped[str] = mapped_column(String(128), nullable=False)
+    endpoint: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    model: Mapped[str | None] = mapped_column(String(128), nullable=True)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()
     )

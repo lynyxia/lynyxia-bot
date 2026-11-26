@@ -1,7 +1,14 @@
 import pytest
 from pydantic import SecretStr, ValidationError
 
-from bot.config import DatabaseSettings, LiveSettings, Settings, TwitchSettings
+from bot.config import (
+    DatabaseSettings,
+    LiveSettings,
+    LLMEndpoint,
+    LLMSettings,
+    Settings,
+    TwitchSettings,
+)
 
 
 def test_secrets_are_redacted(settings) -> None:
@@ -125,3 +132,42 @@ def test_live_gate_defaults_and_list_normalization() -> None:
     assert live.enabled is True
     assert set(live.exempt_commands) == {"chatset", "livepass", "lynyxia"}
     assert LiveSettings(exempt_commands="livepass").exempt_commands == ["livepass"]
+
+
+def test_llm_endpoints_are_normalized_and_secrets_redacted() -> None:
+    llm = LLMSettings(
+        endpoints={
+            "OpenRouter": {
+                "base_url": "https://openrouter.ai/api/v1/",
+                "api_key": "super-secret",
+                "default_model": " openai/gpt-4o-mini ",
+            }
+        }
+    )
+    assert list(llm.endpoints) == ["openrouter"]
+    assert isinstance(llm.endpoints["openrouter"], LLMEndpoint)
+    assert llm.endpoints["openrouter"].base_url == "https://openrouter.ai/api/v1"
+    assert llm.endpoints["openrouter"].default_model == "openai/gpt-4o-mini"
+    assert llm.default_endpoint == "openrouter"
+    assert "super-secret" not in repr(llm)
+
+
+def test_llm_explicit_default_endpoint_is_honored() -> None:
+    endpoints = {
+        "a": {"base_url": "https://a.example/v1", "api_key": "x"},
+        "b": {"base_url": "https://b.example/v1", "api_key": "y"},
+    }
+    assert LLMSettings(endpoints=endpoints, default_endpoint="B").default_endpoint == "b"
+
+
+def test_llm_unknown_default_endpoint_is_rejected() -> None:
+    with pytest.raises(ValidationError, match="must name a configured endpoint"):
+        LLMSettings(
+            endpoints={"a": {"base_url": "https://a.example/v1", "api_key": "x"}},
+            default_endpoint="missing",
+        )
+
+
+def test_llm_endpoint_requires_http_url() -> None:
+    with pytest.raises(ValidationError, match="http"):
+        LLMEndpoint(base_url="ftp://example.com", api_key=SecretStr("x"))

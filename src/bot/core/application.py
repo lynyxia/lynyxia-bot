@@ -84,11 +84,8 @@ class Application:
         self._bot_task: asyncio.Task[None] | None = None
 
     def _create_llm_provider(self) -> Any:
-        if self.settings.llm.provider != "openai":
-            log.warning(
-                "Unknown LLM provider %s; AI chat will be unavailable",
-                self.settings.llm.provider,
-            )
+        if not self.settings.llm.endpoints:
+            log.warning("No LLM endpoints configured; AI chat will be unavailable")
             return None
         from bot.services.llm_openai import OpenAILLMProvider
 

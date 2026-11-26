@@ -198,9 +198,23 @@ async def test_repository_roundtrip() -> None:
         ai_channels = AiChatChannelRepository(database)
         assert await ai_channels.get("7") is None
         await ai_channels.set_persona("7", "generic.md")
+        await ai_channels.set_model("7", "openrouter", "some-model")
         channel_settings = await ai_channels.get("7")
         assert channel_settings is not None
         assert channel_settings.persona == "generic.md"
+        assert (channel_settings.endpoint, channel_settings.model) == (
+            "openrouter",
+            "some-model",
+        )
+        # Updating one setting must not clear the other.
+        await ai_channels.set_persona("7", "other.md")
+        channel_settings = await ai_channels.get("7")
+        assert channel_settings is not None
+        assert channel_settings.persona == "other.md"
+        assert (channel_settings.endpoint, channel_settings.model) == (
+            "openrouter",
+            "some-model",
+        )
 
         allowlist = AiChatAllowlistRepository(database)
         await allowlist.add("7", "42", "chatter")

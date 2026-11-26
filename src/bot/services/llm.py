@@ -44,15 +44,22 @@ class LLMResponse:
 @runtime_checkable
 class LLMProvider(Protocol):
     async def complete(
-        self, messages: Sequence[LLMMessage], *, max_tokens: int | None = None
+        self,
+        messages: Sequence[LLMMessage],
+        *,
+        endpoint: str,
+        model: str,
+        max_tokens: int | None = None,
     ) -> str:
-        """Return a plain completion for ``messages``."""
+        """Return a plain completion for ``messages`` via a named endpoint."""
         ...
 
     async def complete_with_tools(
         self,
         messages: Sequence[LLMMessage],
         *,
+        endpoint: str,
+        model: str,
         tools: Sequence[ToolDefinition] = (),
         max_tokens: int | None = None,
     ) -> LLMResponse:

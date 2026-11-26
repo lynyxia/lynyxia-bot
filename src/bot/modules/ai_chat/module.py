@@ -26,7 +26,11 @@ from bot.modules.ai_chat.tools import ChatMessagesTool, Tool, WebSearchTool
 from bot.modules.base import Module, ModuleContext
 from bot.services.llm import LLMMessage, LLMProvider, ToolDefinition
 
-USAGE = "Usage: !chatset prompt|allow|list|remove [name]"
+USAGE = (
+    "Usage: !chatset prompt <persona>.md | model <endpoint/model> | "
+    "allow|remove <username|id> | list"
+)
+MODEL_PATTERN = re.compile(r"[A-Za-z0-9._:/-]{1,128}")
 
 
 class AIChatModule(Module):
@@ -112,6 +116,8 @@ class AIChatModule(Module):
         action = ctx.args[0].lower()
         if action == "prompt":
             await self._set_prompt(ctx, ctx.args[1:])
+        elif action == "model":
+            await self._set_model(ctx, ctx.args[1:])
         elif action == "allow":
             await self._change_allowlist(ctx, ctx.args[1:], add=True)
         elif action == "remove":
@@ -133,6 +139,60 @@ class AIChatModule(Module):
         assert self._channels is not None
         await self._channels.set_persona(ctx.channel_id, args[0])
         await ctx.reply(f"Persona set to {args[0]} for this channel.")
+
+    async def _current_model(self, channel_id: str) -> tuple[str | None, str | None]:
+        """Return the channel's endpoint/model, falling back to env defaults."""
+        assert self._channels is not None
+        settings = self.context.settings.llm
+        record = await self._channels.get(channel_id)
+        if (
+            record is not None
+            and record.endpoint in settings.endpoints
+            and record.model
+        ):
+            return record.endpoint, record.model
+        endpoint = settings.default_endpoint
+        if endpoint in settings.endpoints:
+            return endpoint, settings.endpoints[endpoint].default_model
+        return None, None
+
+    async def _set_model(self, ctx: CommandContext, args: list[str]) -> None:
+        settings = self.context.settings.llm
+        endpoints = settings.endpoints
+        assert self._channels is not None
+
+        if not args:
+            endpoint, model = await self._current_model(ctx.channel_id)
+            current = f"{endpoint}/{model}" if endpoint and model else "not configured"
+            available = ", ".join(sorted(endpoints)) or "none"
+            await ctx.reply(f"Model: {current}. Available endpoints: {available}")
+            return
+
+        if len(args) != 1:
+            await ctx.reply(USAGE)
+            return
+
+        value = args[0].strip()
+        if "/" in value:
+            endpoint, model = (part.strip() for part in value.split("/", 1))
+            endpoint = endpoint.lower()
+            if endpoint not in endpoints:
+                available = ", ".join(sorted(endpoints)) or "none"
+                await ctx.reply(f"Unknown endpoint. Available: {available}")
+                return
+        else:
+            endpoint = settings.default_endpoint or ""
+            model = value
+            if not endpoint:
+                await ctx.reply("No LLM endpoints are configured.")
+                return
+
+        if not MODEL_PATTERN.fullmatch(model):
+            await ctx.reply("Invalid model name.")
+            return
+
+        await self._channels.set_model(ctx.channel_id, endpoint, model)
+        await ctx.reply(f"Model set to {endpoint}/{model} for this channel.")
 
     async def _resolve_user(self, name: str) -> tuple[str, str] | None:
         target = name.strip().lstrip("@")
@@ -186,8 +246,12 @@ class AIChatModule(Module):
         if not await self._allowlist.contains(ctx.channel_id, ctx.author_id):
             # Silently ignore non-allowlisted users; don't advertise the feature.
             return
-        if self._llm is None:
-            await ctx.reply("AI chat is not configured.")
+        endpoint, model = await self._current_model(ctx.channel_id)
+        if self._llm is None or not endpoint or not model:
+            await ctx.reply(
+                "AI chat is not configured. An admin can set it with "
+                "!chatset model <endpoint/model>."
+            )
             return
 
         cooldown_key = (ctx.channel_id, ctx.author_id)
@@ -243,6 +307,8 @@ class AIChatModule(Module):
             try:
                 response = await self._llm.complete_with_tools(
                     messages,
+                    endpoint=endpoint,
+                    model=model,
                     tools=tool_definitions,
                     max_tokens=self.config.max_response_tokens,
                 )

@@ -37,7 +37,7 @@ src/bot/
 │   ├── output_gate.py       # cached per-channel "may we send?" state
 │   ├── twitch.py            # thin client wrapper
 │   ├── llm.py               # LLM provider interface
-│   └── llm_openai.py        # OpenAI-compatible adapter (custom base_url)
+│   └── llm_openai.py        # OpenAI-compatible adapter (named endpoints)
 ├── database/
 │   ├── models/              # SQLAlchemy 2.x ORM models
 │   ├── repositories/        # all data access
@@ -212,7 +212,9 @@ All variables are read in `src/bot/config.py`. Nested settings use `__`.
 | `BOT_DATABASE__HOST/PORT/USER/PASSWORD/NAME` | Database connection (host is overridden to `db` in Compose) |
 | `BOT_DATABASE__POOL_SIZE`, `BOT_DATABASE__MAX_OVERFLOW` | Connection pooling |
 | `BOT_DATABASE__CONNECT_RETRIES`, `BOT_DATABASE__CONNECT_RETRY_DELAY` | Startup readiness retries |
-| `BOT_LLM__PROVIDER/API_KEY/BASE_URL/MODEL/TIMEOUT_SECONDS/MAX_RESPONSE_CHARS` | Future LLM adapter config |
+| `BOT_LLM__ENDPOINTS` | JSON object of named endpoints (`base_url`, `api_key`, optional `default_model`) |
+| `BOT_LLM__DEFAULT_ENDPOINT` | Endpoint used when a channel has no explicit model (defaults to the first configured) |
+| `BOT_LLM__TIMEOUT_SECONDS`, `BOT_LLM__MAX_RESPONSE_CHARS` | Shared LLM adapter settings |
 | `BOT_LOGGING__LEVEL` | Root log level (e.g. `INFO`) |
 | `BOT_CHAT__MIN_INTERVAL_SECONDS` | Minimum gap between outgoing chat messages (default `1.5`) |
 | `BOT_CHAT__QUEUE_MAXSIZE` | Bounded outbound send queue size |
@@ -327,6 +329,9 @@ Only simple filenames are accepted — no subdirectories or path traversal.
 | Command | Permission | Purpose |
 | --- | --- | --- |
 | `!chatset prompt <persona>.md` | bot owner / channel owner | Select the channel's system prompt |
+| `!chatset model <endpoint>/<model>` | bot owner / channel owner | Select the channel's endpoint and model |
+| `!chatset model <model>` | bot owner / channel owner | Set a model on the default endpoint |
+| `!chatset model` | bot owner / channel owner | Show current selection and available endpoints |
 | `!chatset allow <username\|id>` | bot owner / channel owner | Add someone to the channel allowlist |
 | `!chatset list` | bot owner / channel owner | List the allowlist |
 | `!chatset remove <username\|id>` | bot owner / channel owner | Remove someone |
@@ -334,6 +339,12 @@ Only simple filenames are accepted — no subdirectories or path traversal.
 
 The channel owner is detected by comparing the sender's ID with `ctx.channel_id`;
 bot owners come from `BOT_ADMIN_USER_IDS`.
+
+Endpoints are named in `BOT_LLM__ENDPOINTS`; the model is no longer in `.env` as
+the active setting. Each endpoint may declare a `default_model` fallback, which
+is used until `!chatset model` is run for a channel. Endpoint names are
+case-insensitive and validated against the configured names; API keys are never
+shown in chat or logs.
 
 Persona files may use `{date}`, `{time}`, `{username}` and `{user_id}`
 placeholders. They are replaced before the system prompt is sent (`date` is
@@ -498,7 +509,8 @@ chatter's `username` to each logged message; revision `0004` adds
 `channel_authorizations` for per-channel broadcaster grants; revision `0005`
 adds the AI chat settings, allowlist and thread tables; revision `0006` adds
 `channel_states` for the per-channel output toggle; revision `0007` adds
-`live_passes` for the per-channel live allowlist.
+`live_passes` for the per-channel live allowlist; revision `0008` adds per-channel
+endpoint/model selection to `ai_chat_channels`.
 
 ### Importing legacy SQLite logs
 
@@ -686,6 +698,11 @@ supported in this milestone.
 - EventSub stream status with startup Helix hydration, cached per channel
 - `!livepass add|list|remove` allowlist; commands gated while the stream is live
 - All chat messages are still logged, live or offline
+
+**Milestone 10 — named LLM endpoints (done)**
+
+- Multiple named OpenAI-compatible endpoints configured via `BOT_LLM__ENDPOINTS`
+- `!chatset model <endpoint>/<model>` selects endpoint and model per channel
 
 **Explicitly deferred to later milestones**
 

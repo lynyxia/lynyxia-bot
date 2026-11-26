@@ -6,6 +6,9 @@ import logging
 import re
 from dataclasses import dataclass
 
+from pydantic import SecretStr
+
+from bot.config import LLMEndpoint
 from bot.core.event_router import CommandContext, EventRouter
 from bot.core.module_manager import ModuleManager
 from bot.core.permissions import PermissionService
@@ -29,14 +32,28 @@ class AllowEntry:
 class FakeChannels:
     def __init__(self) -> None:
         self.persona: str | None = None
+        self.endpoint: str | None = None
+        self.model: str | None = None
 
     async def get(self, channel_id: str):
-        if self.persona is None:
+        if self.persona is None and self.endpoint is None and self.model is None:
             return None
-        return type("Channel", (), {"persona": self.persona})()
+        return type(
+            "Channel",
+            (),
+            {
+                "persona": self.persona or "",
+                "endpoint": self.endpoint,
+                "model": self.model,
+            },
+        )()
 
     async def set_persona(self, channel_id: str, persona: str) -> None:
         self.persona = persona
+
+    async def set_model(self, channel_id: str, endpoint: str, model: str) -> None:
+        self.endpoint = endpoint
+        self.model = model
 
 
 class FakeAllowlist:
@@ -96,9 +113,15 @@ class FakeLLM:
     def __init__(self, responses: list[LLMResponse]) -> None:
         self.responses = list(responses)
         self.calls: list[list] = []
+        self.endpoints: list[str] = []
+        self.models: list[str] = []
 
-    async def complete_with_tools(self, messages, *, tools=(), max_tokens=None):
+    async def complete_with_tools(
+        self, messages, *, endpoint=None, model=None, tools=(), max_tokens=None
+    ):
         self.calls.append(list(messages))
+        self.endpoints.append(endpoint)
+        self.models.append(model)
         return self.responses.pop(0)
 
 
@@ -153,6 +176,15 @@ def make_chat_ctx(
 
 
 def make_module(settings, monkeypatch, personas=None, config=None, llm=None, threads=None):
+    if not settings.llm.endpoints:
+        settings.llm.endpoints = {
+            "test": LLMEndpoint(
+                base_url="https://llm.example/v1",
+                api_key=SecretStr("key"),
+                default_model="test-model",
+            )
+        }
+        settings.llm.default_endpoint = "test"
     channels = FakeChannels()
     allowlist = FakeAllowlist()
     monkeypatch.setattr("bot.modules.ai_chat.module.AiChatChannelRepository", lambda _db: channels)
@@ -253,6 +285,95 @@ async def test_chatset_unknown_persona(settings, monkeypatch) -> None:
     await module.on_chatset(ctx)
 
     assert "Unknown persona" in replies[0]
+
+
+async def test_chatset_model_with_named_endpoint(settings, monkeypatch) -> None:
+    module, channels, _ = make_module(settings, monkeypatch)
+    await module.setup()
+    ctx, replies = make_ctx(["model", "TEST/custom-model"])
+
+    await module.on_chatset(ctx)
+
+    assert (channels.endpoint, channels.model) == ("test", "custom-model")
+    assert replies == ["Model set to test/custom-model for this channel."]
+
+
+async def test_chatset_model_uses_default_endpoint(settings, monkeypatch) -> None:
+    module, channels, _ = make_module(settings, monkeypatch)
+    await module.setup()
+    ctx, replies = make_ctx(["model", "plain-model"])
+
+    await module.on_chatset(ctx)
+
+    assert (channels.endpoint, channels.model) == ("test", "plain-model")
+    assert replies == ["Model set to test/plain-model for this channel."]
+
+
+async def test_chatset_model_rejects_unknown_endpoint(settings, monkeypatch) -> None:
+    module, channels, _ = make_module(settings, monkeypatch)
+    await module.setup()
+    ctx, replies = make_ctx(["model", "nope/model"])
+
+    await module.on_chatset(ctx)
+
+    assert (channels.endpoint, channels.model) == (None, None)
+    assert replies == ["Unknown endpoint. Available: test"]
+
+
+async def test_chatset_model_rejects_invalid_model_name(settings, monkeypatch) -> None:
+    module, channels, _ = make_module(settings, monkeypatch)
+    await module.setup()
+    ctx, replies = make_ctx(["model", "test/bad model"])
+
+    await module.on_chatset(ctx)
+
+    assert (channels.endpoint, channels.model) == (None, None)
+    assert replies == ["Invalid model name."]
+
+
+async def test_chatset_model_without_args_shows_status(settings, monkeypatch) -> None:
+    module, _channels, _ = make_module(settings, monkeypatch)
+    await module.setup()
+    ctx, replies = make_ctx(["model"])
+
+    await module.on_chatset(ctx)
+
+    assert replies == ["Model: test/test-model. Available endpoints: test"]
+
+
+async def test_chat_uses_channel_model(settings, monkeypatch) -> None:
+    llm = FakeLLM([LLMResponse(content="Hi!")])
+    module, _channels, allowlist = make_module(
+        settings, monkeypatch, llm=llm, config={"tools": [], "cooldown_seconds": 0}
+    )
+    await module.setup()
+    await allowlist.add("7", "99", "chatter")
+    set_ctx, _ = make_ctx(["model", "test/chosen-model"])
+    await module.on_chatset(set_ctx)
+
+    chat_ctx, replies = make_chat_ctx()
+    await module.on_chat(chat_ctx)
+
+    assert replies == ["Hi!"]
+    assert llm.endpoints == ["test"]
+    assert llm.models == ["chosen-model"]
+
+
+async def test_chat_without_any_model_reports_setup(settings, monkeypatch) -> None:
+    llm = FakeLLM([LLMResponse(content="should not happen")])
+    module, _channels, allowlist = make_module(
+        settings, monkeypatch, llm=llm, config={"tools": [], "cooldown_seconds": 0}
+    )
+    module.context.settings.llm.endpoints = {}
+    module.context.settings.llm.default_endpoint = None
+    await module.setup()
+    await allowlist.add("7", "99", "chatter")
+    ctx, replies = make_chat_ctx()
+
+    await module.on_chat(ctx)
+
+    assert "!chatset model" in replies[0]
+    assert llm.calls == []
 
 
 async def test_chatset_allow_list_remove(settings, monkeypatch) -> None:
