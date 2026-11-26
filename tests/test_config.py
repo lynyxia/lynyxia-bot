@@ -126,6 +126,7 @@ def test_defaults_include_all_foundations_modules(settings) -> None:
         "livepass",
         "trivia",
         "pyramid",
+        "unused_emotes",
     ]
 
 

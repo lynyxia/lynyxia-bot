@@ -18,6 +18,7 @@ async def test_application_lifecycle(settings, fake_database, fake_bot) -> None:
         "livepass",
         "trivia",
         "pyramid",
+        "unused_emotes",
     }
     assert fake_bot.router is app.router
     assert app.twitch._client is fake_bot

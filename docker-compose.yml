@@ -44,6 +44,8 @@ services:
       - ./trivia:/app/trivia:ro
       # AI request/reasoning/response logs are visible on the host.
       - ./logs:/app/logs
+      # Generated HTML reports are written by the bot, so this mount is writable.
+      - ./reports:/app/reports
     depends_on:
       db:
         condition: service_healthy

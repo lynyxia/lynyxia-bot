@@ -240,6 +240,7 @@ class Settings(BaseSettings):
             "livepass",
             "trivia",
             "pyramid",
+            "unused_emotes",
         ]
     )
     admin_user_ids: list[str] = Field(default_factory=list)

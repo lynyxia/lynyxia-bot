@@ -31,6 +31,7 @@ src/bot/
 │   ├── quotes/              # !rq commands
 │   ├── trivia/              # !trivia/!hint/!pass, JSON category files
 │   ├── pyramid/             # passive emote-pyramid watcher
+│   ├── unused_emotes/       # !unusedemotes 7TV HTML reports
 │   └── <feature>/           # one Module subclass per package
 ├── services/
 │   ├── database.py          # engine, session factory, pooling, retry
@@ -240,6 +241,7 @@ BOT_MODULE__ECOUNT='{"default_days":365,"max_days":3650}'
 BOT_MODULE__LINES='{"date_format":"%Y-%m-%d %H:%M:%S"}'
 BOT_MODULE__TRIVIA='{"directory":"trivia","timeout_seconds":60,"hint_delay_seconds":10,"similarity_threshold":0.9}'
 BOT_MODULE__PYRAMID='{"enabled":true}'
+BOT_MODULE__UNUSED_EMOTES='{"url_prefix":"https://reports.example.com","default_cutoff":"365d","default_threshold":10}'
 ```
 
 Modules read it via `self.context.config` and validate it with their own
@@ -540,6 +542,41 @@ Rules:
   channel is live. `BOT_MODULE__PYRAMID='{"enabled":false}'` disables it
   without editing `BOT_ENABLED_MODULES`.
 
+### Unused emotes report
+
+`!unusedemotes [cutoff] [threshold]` is restricted to **bot admins and the
+channel owner**; everyone else is ignored. It scans the requesting channel's
+personal 7TV emote set and counts how often each emote appeared in that
+channel's logged messages. Arguments use the same syntax as `!ecount`:
+
+| Argument | Default | Meaning |
+| --- | --- | --- |
+| `cutoff` | `365d` | Look-back window: `<number><y\|w\|d\|m>` (`m` = 30 days, `y` = 365 days) |
+| `threshold` | `10` | Emotes used fewer times than this are listed |
+
+Invalid arguments get a usage reply instead of a silent fallback. Counts are
+whole-word, case-sensitive, scoped to the current channel, exclude `!ecount
+<emote>` command invocations, and use the same `chat_messages` table as the
+other modules — no schema change.
+
+The HTML report is written to `reports/<channel-login>/unusedemotes.html` under
+the writable `./reports` Docker mount. Each channel gets its own folder, the
+file is replaced atomically, and one report per channel can run at a time.
+7TV failures are reported in chat as `Error generating report.` and logged;
+7TV emote names, image URLs and the channel name are HTML-escaped before they
+reach the report.
+
+Set the public prefix in `.env` (no trailing slash needed):
+
+```bash
+BOT_MODULE__UNUSED_EMOTES='{"url_prefix":"https://reports.example.com"}'
+```
+
+The completion message is `Report generated, view at {url}/{channel}/
+unusedemotes.html`, with `{url}` replaced by that prefix and `{channel}` by the
+requesting channel's configured Twitch login. If no prefix is configured the
+command replies `Report URL is not configured.` without generating a file.
+
 ---
 
 ## 6. Starting the application with Docker Compose
@@ -799,6 +836,12 @@ supported in this milestone.
 - Pure, unit-tested detector state machine with per-channel candidates
 - Tiered completion reactions, theft detection and post-peak collapse curses
 - Live-mode suppression and all existing send-safety gates
+
+**Milestone 13 — unused emotes reports (done)**
+
+- Admin/owner-only `!unusedemotes` with strict cutoff and threshold arguments
+- Async 7TV lookups, per-channel HTML reports on a writable Docker mount
+- HTML escaping, URL-safe channel folders and in-flight deduplication
 
 **Explicitly deferred to later milestones**
 

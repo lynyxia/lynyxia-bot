@@ -36,6 +36,7 @@ def test_discovery_finds_foundation_modules(settings) -> None:
         "livepass",
         "trivia",
         "pyramid",
+        "unused_emotes",
     }
 
 

@@ -20,6 +20,8 @@ dist/
 htmlcov/
 
 # Runtime data
+reports/*
+!reports/.gitkeep
 postgres_data/
 *.log
 logs.db

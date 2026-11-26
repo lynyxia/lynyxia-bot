@@ -40,6 +40,7 @@ def settings() -> Settings:
             "livepass",
             "trivia",
             "pyramid",
+            "unused_emotes",
         ],
         admin_user_ids=["42"],
     )
