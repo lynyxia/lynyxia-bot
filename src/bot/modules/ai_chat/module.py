@@ -278,7 +278,7 @@ class AIChatModule(Module):
             for entry in (record.messages if record else [])
         ]
         prompt_text = ctx.content
-        if prompt_text.lower().startswith("!chat"):
+        if prompt_text.lower().startswith(("!chat","!claude","!ai")):
             prompt_text = prompt_text[5:].strip()
         bot_login = self.context.settings.twitch.bot_username
         prompt_text = re.sub(
