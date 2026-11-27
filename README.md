@@ -349,7 +349,7 @@ Only simple filenames are accepted — no subdirectories or path traversal.
 | `!chatset allow <username\|id>` | bot owner / channel owner | Add someone to the channel allowlist |
 | `!chatset list` | bot owner / channel owner | List the allowlist |
 | `!chatset remove <username\|id>` | bot owner / channel owner | Remove someone |
-| `!chat [question]` | allowlisted users | Ask the LLM; a leading `@botname` works too |
+| `!chat [question]` / `!claude` / `!ai` | allowlisted users | Ask the LLM; a leading `@botname` works too. All three names are equivalent aliases. |
 
 The channel owner is detected by comparing the sender's ID with `ctx.channel_id`;
 bot owners come from `BOT_ADMIN_USER_IDS`.
@@ -379,7 +379,8 @@ Set `BOT_LOGGING__LEVEL=INFO` to log every incoming chat message as
 ID, reply/thread IDs, mention IDs and raw text — useful for diagnosing why a
 mention did or did not activate the module.
 
-`!chat` and leading mentions start a fresh context. Replies in the same Twitch
+`!chat`, its aliases `!claude` and `!ai`, and leading mentions start a fresh
+context. Replies in the same Twitch
 thread reuse stored context from `ai_chat_threads`. The history, tool rounds and
 response length are all capped by config, and per-user cooldowns limit abuse.
 All replies are threaded and pass through the shared send queue and blocklist.

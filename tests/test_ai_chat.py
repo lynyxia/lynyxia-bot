@@ -6,6 +6,7 @@ import logging
 import re
 from dataclasses import dataclass
 
+import pytest
 from pydantic import SecretStr
 
 from bot.config import LLMEndpoint
@@ -440,6 +441,46 @@ async def test_chat_replies_and_stores_thread(settings, monkeypatch) -> None:
         "role": "assistant",
         "content": "Hello there!",
     }
+
+
+@pytest.mark.parametrize("alias", ["chat", "claude", "ai"])
+async def test_chat_aliases_dispatch_and_strip_their_prefix(
+    settings, monkeypatch, alias
+) -> None:
+    llm = FakeLLM([LLMResponse(content="Hi!")])
+    module, _channels, allowlist = make_module(
+        settings,
+        monkeypatch,
+        llm=llm,
+        config={"tools": [], "cooldown_seconds": 0},
+    )
+    await module.setup()
+    await allowlist.add("7", "99", "chatter")
+    ctx, replies = make_chat_ctx(content=f"!{alias} hello there")
+    ctx.command = alias
+
+    await module.context.router.dispatch_command(ctx)
+
+    assert replies == ["Hi!"]
+    assert llm.calls[0][-1].content == "hello there"
+
+
+async def test_chat_alias_prefix_needs_a_word_boundary(settings, monkeypatch) -> None:
+    llm = FakeLLM([LLMResponse(content="Hi!")])
+    module, _channels, allowlist = make_module(
+        settings,
+        monkeypatch,
+        llm=llm,
+        config={"tools": [], "cooldown_seconds": 0},
+    )
+    await module.setup()
+    await allowlist.add("7", "99", "chatter")
+    ctx, _replies = make_chat_ctx(content="!aime hello")
+    ctx.command = "ai"
+
+    await module.on_chat(ctx)
+
+    assert llm.calls[0][-1].content == "!aime hello"
 
 
 async def test_chat_executes_tool_calls_then_answers(settings, monkeypatch) -> None:

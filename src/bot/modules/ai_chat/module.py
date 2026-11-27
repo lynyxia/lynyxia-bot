@@ -30,6 +30,9 @@ USAGE = (
     "Usage: !chatset prompt <persona>.md | model <endpoint/model> | "
     "allow|remove <username|id> | list"
 )
+# All names that start an AI conversation. Kept in one place so registration
+# and prompt stripping cannot drift apart.
+CHAT_COMMANDS = ("chat", "claude", "ai")
 MODEL_PATTERN = re.compile(r"[A-Za-z0-9._:/-]{1,128}")
 
 
@@ -81,7 +84,8 @@ class AIChatModule(Module):
             )
 
         self.subscribe(self.context.router.on_command("chatset", self.on_chatset))
-        self.subscribe(self.context.router.on_command("chat", self.on_chat))
+        for command in CHAT_COMMANDS:
+            self.subscribe(self.context.router.on_command(command, self.on_chat))
 
     def _register_tool(self, tool: Tool) -> None:
         self._tools.append(tool)
@@ -278,8 +282,16 @@ class AIChatModule(Module):
             for entry in (record.messages if record else [])
         ]
         prompt_text = ctx.content
-        if prompt_text.lower().startswith(("!chat","!claude","!ai")):
-            prompt_text = prompt_text[5:].strip()
+        # Strip whichever alias was typed. Using the dispatched command name
+        # avoids hardcoding a prefix length (which differs per alias) and
+        # leaves mention activations, which have no leading "!", untouched.
+        command = ctx.command.lower()
+        if command in CHAT_COMMANDS:
+            prefix = f"!{command}"
+            if prompt_text.lower().startswith(prefix) and (
+                len(prompt_text) == len(prefix) or prompt_text[len(prefix)].isspace()
+            ):
+                prompt_text = prompt_text[len(prefix) :].strip()
         bot_login = self.context.settings.twitch.bot_username
         prompt_text = re.sub(
             rf"^@{re.escape(bot_login)}\b",
