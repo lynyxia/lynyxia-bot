@@ -62,7 +62,7 @@ class AIChatModule(Module):
         self._users = UserRepository(database)
         self._messages = ChatMessageRepository(database)
 
-        self._personas = await asyncio.to_thread(load_personas, self.config.personas_dir)
+        await self._reload_personas()
         self.log.info(
             "Loaded %s persona(s) from %s", len(self._personas), self.config.personas_dir
         )
@@ -86,6 +86,15 @@ class AIChatModule(Module):
         self.subscribe(self.context.router.on_command("chatset", self.on_chatset))
         for command in CHAT_COMMANDS:
             self.subscribe(self.context.router.on_command(command, self.on_chat))
+
+    async def _reload_personas(self) -> dict[str, str]:
+        """Re-read persona files so edits and new files need no bot restart.
+
+        Mirrors the trivia module: file I/O is offloaded to a worker thread and
+        the fresh result replaces the cached mapping on every call.
+        """
+        self._personas = await asyncio.to_thread(load_personas, self.config.personas_dir)
+        return self._personas
 
     def _register_tool(self, tool: Tool) -> None:
         self._tools.append(tool)
@@ -132,6 +141,9 @@ class AIChatModule(Module):
             await ctx.reply(USAGE)
 
     async def _set_prompt(self, ctx: CommandContext, args: list[str]) -> None:
+        # Reload on each command: editing a file or adding a new one in the
+        # mounted directory is enough, no bot restart needed.
+        await self._reload_personas()
         if (
             len(args) != 1
             or not is_valid_persona_name(args[0])
@@ -264,6 +276,9 @@ class AIChatModule(Module):
             return
         self._cooldowns[cooldown_key] = now
 
+        # A persona may have been edited since the last reply; re-read it so
+        # changes take effect immediately, like trivia questions do.
+        await self._reload_personas()
         persona_name, persona_template = await self._current_persona(ctx.channel_id)
         requester = ctx.author_login or ctx.author_name or ctx.author_id
         system_prompt = (

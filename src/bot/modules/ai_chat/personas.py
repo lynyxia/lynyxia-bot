@@ -27,7 +27,11 @@ def load_personas(directory: str | Path) -> dict[str, str]:
     for path in sorted(root.glob("*.md")):
         if not is_valid_persona_name(path.name):
             continue
-        content = path.read_text(encoding="utf-8").strip()
+        try:
+            content = path.read_text(encoding="utf-8").strip()
+        except (OSError, UnicodeDecodeError):
+            # A file may be half-written while we reload; skip it this time.
+            continue
         if not content or len(content) > MAX_PERSONA_CHARS:
             continue
         personas[path.name] = content

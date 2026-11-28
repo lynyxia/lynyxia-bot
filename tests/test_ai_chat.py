@@ -288,6 +288,50 @@ async def test_chatset_unknown_persona(settings, monkeypatch) -> None:
     assert "Unknown persona" in replies[0]
 
 
+async def test_personas_are_reloaded_without_restart(
+    settings, monkeypatch, tmp_path
+) -> None:
+    personas_dir = tmp_path / "personas"
+    personas_dir.mkdir()
+    (personas_dir / "generic.md").write_text("Be nice.", encoding="utf-8")
+    llm = FakeLLM([LLMResponse(content="Hi!")])
+    module, channels, allowlist = make_module(
+        settings,
+        monkeypatch,
+        llm=llm,
+        config={
+            "personas_dir": str(personas_dir),
+            "tools": [],
+            "cooldown_seconds": 0,
+        },
+    )
+    # make_module injects a static mapping; replace it with the real loader so
+    # this test exercises actual disk reads.
+    monkeypatch.setattr(
+        "bot.modules.ai_chat.module.load_personas",
+        lambda _dir: load_personas(personas_dir),
+    )
+    await module.setup()
+
+    # Files added after startup are picked up by the next !chatset prompt.
+    (personas_dir / "angry.md").write_text("Be rude.", encoding="utf-8")
+    ctx, replies = make_ctx(["prompt", "angry.md"])
+    await module.on_chatset(ctx)
+
+    assert replies == ["Persona set to angry.md for this channel."]
+    assert channels.persona == "angry.md"
+
+    # Editing that persona changes the next chat reply without a restart.
+    (personas_dir / "angry.md").write_text(
+        "Edited persona for {username}.", encoding="utf-8"
+    )
+    await allowlist.add("7", "99", "chatter")
+    chat_ctx, _chat_replies = make_chat_ctx()
+    await module.on_chat(chat_ctx)
+
+    assert llm.calls[0][0].content.startswith("Edited persona for chatter.")
+
+
 async def test_chatset_model_with_named_endpoint(settings, monkeypatch) -> None:
     module, channels, _ = make_module(settings, monkeypatch)
     await module.setup()

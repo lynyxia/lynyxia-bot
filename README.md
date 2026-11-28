@@ -339,8 +339,10 @@ survive restarts. Blocked users are ignored silently.
 
 The AI chat module is configured through `BOT_MODULE__AI_CHAT` (see
 `.env.example`). Personas are plain `*.md` files in `./personas`, mounted
-read-only into the container; add or remove files there and restart the bot.
-Only simple filenames are accepted — no subdirectories or path traversal.
+read-only into the container. Like trivia questions, persona files are re-read
+on each `!chatset prompt` command and each AI reply, so adding, editing or
+removing a file works without a restart. Only simple filenames are accepted —
+no subdirectories or path traversal.
 
 | Command | Permission | Purpose |
 | --- | --- | --- |
