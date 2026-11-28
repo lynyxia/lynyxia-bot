@@ -30,6 +30,7 @@ from twitchio.eventsub import (
 from twitchio.ext import commands
 from twitchio.web import AiohttpAdapter
 
+from bot.core.chat_send import send_with_token_fallback
 from bot.core.chat_send_queue import ChatSender, DirectChatSender
 from bot.core.event_router import ChatMessageEvent, CommandContext, EventRouter
 from bot.database.repositories.channel_authorization import (
@@ -131,6 +132,18 @@ class BotClient(commands.Bot):
     def channel_authorization_url(self) -> str:
         """URL a broadcaster opens to grant ``channel:bot`` to the app."""
         return self._authorization_url(self._channel_scopes)
+
+    def _note_token_fallback(self, channel_id: str) -> None:
+        """Log once per channel that sends are using the bot user token."""
+        if channel_id in self._fallback_warned_channels:
+            return
+        self._fallback_warned_channels.add(channel_id)
+        log.info(
+            "Channel %s is using the bot user token for sends "
+            "(no Chat Bot badge until authorized): %s",
+            self._login_for(channel_id),
+            self.channel_authorization_url(),
+        )
 
     def _login_for(self, channel_id: str) -> str:
         for known_id, login in zip(self.channel_ids, self.channel_logins, strict=False):
@@ -491,46 +504,31 @@ class BotClient(commands.Bot):
                 await send(content, **kwargs)
 
             async def attempt_send(content: str) -> None:
+                # Shared with TwitchService so passive modules (e.g. pyramid
+                # reactions) get the same channel:bot -> user-token fallback.
                 try:
-                    await deliver(content, token_for=None)
-                    return
-                except Exception as exc:
-                    if getattr(exc, "status", None) != 401:
-                        log.warning(
-                            "Chat send failed in channel %s (%s)",
+                    await send_with_token_fallback(
+                        lambda token: deliver(content, token_for=token),
+                        bot_id=self.bot_id,
+                        has_user_token=lambda: self.bot_id in self.tokens,
+                        on_no_token=lambda: log.warning(
+                            "Chat sends unauthorized in channel %s and no bot user "
+                            "token is available; have the broadcaster authorize: %s",
+                            channel_id,
+                            self.channel_authorization_url(),
+                        ),
+                        on_fallback=lambda: self._note_token_fallback(channel_id),
+                        on_fallback_error=lambda exc: log.warning(
+                            "Fallback user-token send failed in channel %s (%s)",
                             channel_id,
                             type(exc).__name__,
-                        )
-                        return
-
-                # 401: the app lacks channel:bot/mod status here. Use the bot
-                # user token until the broadcaster authorizes.
-                if self.bot_id not in self.tokens:
-                    log.warning(
-                        "Chat sends unauthorized in channel %s and no bot user token "
-                        "is available; have the broadcaster authorize: %s",
-                        channel_id,
-                        self.channel_authorization_url(),
+                        ),
                     )
-                    return
-
-                try:
-                    await deliver(content, token_for=self.bot_id)
                 except Exception as exc:
                     log.warning(
-                        "Fallback user-token send failed in channel %s (%s)",
+                        "Chat send failed in channel %s (%s)",
                         channel_id,
                         type(exc).__name__,
-                    )
-                    return
-
-                if channel_id not in self._fallback_warned_channels:
-                    self._fallback_warned_channels.add(channel_id)
-                    log.info(
-                        "Channel %s is using the bot user token for sends "
-                        "(no Chat Bot badge until authorized): %s",
-                        self._login_for(channel_id),
-                        self.channel_authorization_url(),
                     )
 
             await self._chat_sender.submit(attempt_send, text, channel_id)

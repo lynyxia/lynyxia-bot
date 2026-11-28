@@ -1,5 +1,6 @@
 """Checks the TwitchIO 3.x EventSub and OAuth integration."""
 
+import logging
 from collections.abc import Sequence
 from datetime import UTC, datetime, timedelta, timezone
 from types import SimpleNamespace
@@ -808,6 +809,7 @@ async def test_setup_hook_logs_missing_channel_authorization(settings, caplog) -
 
 
 async def test_unauthorized_send_falls_back_to_user_token(settings, caplog) -> None:
+    caplog.set_level(logging.INFO)
     router = EventRouter()
 
     async def handler(ctx: CommandContext) -> None:

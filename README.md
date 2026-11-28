@@ -190,8 +190,10 @@ the **broadcaster**. The callback stores that token in the
   `["channel:bot"]`).
 - If an app-token send returns `401`, the bot retries once with its own managed
   **user token**, so commands keep working before a channel is authorized (or
-  while its grant is revoked). Those messages do **not** get the Chat Bot
-  badge; a single info log per channel explains how to fix that.
+  while its grant is revoked). The same fallback applies to every outbound
+  message, including passive module reactions such as the pyramid watcher's.
+  Those messages do **not** get the Chat Bot badge; a single info log per
+  channel explains how to fix that.
 - A successful app-token send (including channels where the bot is a moderator)
   keeps the badge and does not use the fallback.
 

@@ -3,7 +3,7 @@
 This is a passive module: it has no commands. It registers a ``message``
 handler, keeps one detector per channel in memory, and sends reactions through
 the shared Twitch service so the outbound queue, blocklist, ``!lynyxia`` output
-gate and live-mode suppression all apply.
+gate, live-mode suppression and app-token/user-token fallback all apply.
 """
 
 from __future__ import annotations
