@@ -2,13 +2,14 @@
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 import httpx
 
 from bot.core.event_router import CommandContext
 from bot.database.repositories.chat_message import ChatSample, Chatter
 from bot.modules.ai_chat.tools import (
+    ChannelHistoryTool,
     ChatMessagesTool,
     ChatterSamplesTool,
     ListChattersTool,
@@ -119,10 +120,11 @@ NOW = datetime(2026, 1, 2, 3, 4, tzinfo=UTC)
 
 
 class HistoryMessages:
-    def __init__(self, chatters=(), samples=(), results=()) -> None:
+    def __init__(self, chatters=(), samples=(), results=(), history=()) -> None:
         self.chatters = list(chatters)
         self.samples = list(samples)
         self.results = list(results)
+        self.history = list(history)
         self.calls: dict[str, tuple] = {}
 
     async def list_chatters(self, channel_id: str, **kwargs) -> list[Chatter]:
@@ -138,6 +140,10 @@ class HistoryMessages:
     async def search(self, channel_id: str, term: str, **kwargs) -> list[ChatSample]:
         self.calls["search"] = (channel_id, term, kwargs)
         return self.results
+
+    async def get_channel_history(self, channel_id: str, **kwargs) -> list[ChatSample]:
+        self.calls["history"] = (channel_id, kwargs)
+        return self.history
 
 
 class HistoryUsers:
@@ -257,3 +263,94 @@ async def test_search_requires_a_query() -> None:
 
     assert result == "A search query is required."
     assert "search" not in messages.calls
+
+
+async def test_channel_history_uses_yesterday_utc_bounds() -> None:
+    messages = HistoryMessages(
+        history=[
+            ChatSample("1", "Alice", "good morning", datetime(2026, 1, 1, 8, tzinfo=UTC)),
+            ChatSample("2", "Bob", "anyone watching?", datetime(2026, 1, 1, 9, tzinfo=UTC)),
+        ]
+    )
+    tool = ChannelHistoryTool(HistoryUsers(), messages, bot_id="42")  # type: ignore[arg-type]
+
+    result = await tool.execute({"day_offset": 1, "limit": 10}, make_ctx())
+
+    assert "[2026-01-01 08:00] Alice: good morning" in result
+    assert "[2026-01-01 09:00] Bob: anyone watching?" in result
+    channel, kwargs = messages.calls["history"]
+    assert channel == "7"
+    start, end = kwargs["start"], kwargs["end"]
+    assert start.date() == (datetime.now(UTC) - timedelta(days=1)).date()
+    assert (start.hour, start.minute, start.second) == (0, 0, 0)
+    assert end - start == timedelta(days=1)
+    assert kwargs["limit"] == 10
+    assert kwargs["exclude_user_ids"] == ("42",)
+
+
+async def test_channel_history_clamps_offset_and_filters_one_user() -> None:
+    messages = HistoryMessages()
+    tool = ChannelHistoryTool(HistoryUsers(), messages, bot_id="42")  # type: ignore[arg-type]
+
+    result = await tool.execute(
+        {"day_offset": 999, "limit": 999, "user": "@alice"}, make_ctx()
+    )
+
+    assert result == "No messages found in that time window."
+    _channel, kwargs = messages.calls["history"]
+    assert kwargs["user_id"] == "1"
+    assert kwargs["limit"] == 200
+    start = kwargs["start"]
+    assert start.date() == (datetime.now(UTC) - timedelta(days=365)).date()
+
+
+async def test_channel_history_supports_since_days() -> None:
+    messages = HistoryMessages()
+    tool = ChannelHistoryTool(HistoryUsers(), messages, bot_id="42")  # type: ignore[arg-type]
+    before = datetime.now(UTC)
+
+    await tool.execute({"since_days": 7}, make_ctx())
+
+    after = datetime.now(UTC)
+    _channel, kwargs = messages.calls["history"]
+    start, end = kwargs["start"], kwargs["end"]
+    assert end - start == timedelta(days=7)
+    assert before - timedelta(days=7) <= start <= after - timedelta(days=7)
+    assert before <= end <= after
+
+
+async def test_channel_history_supports_hours_and_takes_precedence() -> None:
+    messages = HistoryMessages()
+    tool = ChannelHistoryTool(HistoryUsers(), messages, bot_id="42")  # type: ignore[arg-type]
+    before = datetime.now(UTC)
+
+    await tool.execute(
+        {"hours": 6, "since_days": 7, "day_offset": 1}, make_ctx()
+    )
+
+    after = datetime.now(UTC)
+    _channel, kwargs = messages.calls["history"]
+    start, end = kwargs["start"], kwargs["end"]
+    assert end - start == timedelta(hours=6)
+    assert before - timedelta(hours=6) <= start <= after - timedelta(hours=6)
+    assert before <= end <= after
+
+
+async def test_channel_history_clamps_hours() -> None:
+    messages = HistoryMessages()
+    tool = ChannelHistoryTool(HistoryUsers(), messages, bot_id="42")  # type: ignore[arg-type]
+
+    await tool.execute({"hours": 9999}, make_ctx())
+
+    _channel, kwargs = messages.calls["history"]
+    assert kwargs["end"] - kwargs["start"] == timedelta(hours=720)
+
+
+async def test_channel_history_rejects_unknown_user() -> None:
+    messages = HistoryMessages()
+    tool = ChannelHistoryTool(HistoryUsers(), messages, bot_id="42")  # type: ignore[arg-type]
+
+    result = await tool.execute({"user": "nobody"}, make_ctx())
+
+    assert "No messages found for nobody" in result
+    assert "history" not in messages.calls

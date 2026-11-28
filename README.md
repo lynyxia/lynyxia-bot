@@ -402,6 +402,12 @@ Tools are enabled with the `tools` config array:
   funniest" don't need one lookup per person.
 - `search_chat` — searches this channel's history for a word or phrase,
   optionally limited to one chatter (e.g. who other people called "cute").
+- `channel_history` — reads a chronological sample spread across a time window:
+  one UTC day (`day_offset=1` means yesterday), a rolling number of days
+  (`since_days=30` for "last month") or hours (`hours=6` for "the past six
+  hours"). It can answer "what was chat talking about yesterday?" from the
+  timeline rather than a few per-user messages. If several options are given,
+  `hours` wins over `since_days`, which wins over `day_offset`.
 
 The last three only ever read the **current channel's** history, exclude the
 bot's own messages and cap their output, so they cannot pull data from other

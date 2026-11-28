@@ -21,6 +21,7 @@ class AIChatConfig(BaseModel):
             "list_chatters",
             "sample_chatter_messages",
             "search_chat",
+            "channel_history",
         ]
     )
     searxng_url: str | None = None

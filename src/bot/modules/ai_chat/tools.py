@@ -21,6 +21,17 @@ def _as_int(value: object, default: int, *, low: int, high: int) -> int:
     return max(low, min(parsed, high))
 
 
+def _optional_int(value: object, *, low: int, high: int) -> int | None:
+    """Parse an optional tool argument, returning ``None`` when omitted."""
+    if value is None or value == "":
+        return None
+    try:
+        parsed = int(value)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return None
+    return max(low, min(parsed, high))
+
+
 def _since(days: int) -> datetime:
     return datetime.now(UTC) - timedelta(days=days)
 
@@ -292,6 +303,107 @@ class ChatterSamplesTool:
         ]
         return "\n".join(lines)[: self._max_chars] or (
             "No messages found for those chatters."
+        )
+
+
+class ChannelHistoryTool:
+    name = "channel_history"
+    description = (
+        "Read a chronological sample of what everyone said in this channel "
+        "over a time window. Messages are spread across the whole window, not "
+        "just the most recent ones. For one UTC day use day_offset (0 = today, "
+        "1 = yesterday). For a rolling window use since_days (e.g. 7 = last "
+        "week, 30 = last month) or hours (e.g. 6 = past six hours). If more "
+        "than one is given, hours wins over since_days, which wins over "
+        "day_offset."
+    )
+    parameters = {
+        "type": "object",
+        "properties": {
+            "day_offset": {
+                "type": "integer",
+                "description": "One UTC day, N days back: 0 = today, 1 = yesterday",
+                "minimum": 0,
+                "maximum": 365,
+            },
+            "since_days": {
+                "type": "integer",
+                "description": "Rolling window ending now, spanning the last N days",
+                "minimum": 1,
+                "maximum": 3650,
+            },
+            "hours": {
+                "type": "integer",
+                "description": "Rolling window ending now, spanning the last N hours",
+                "minimum": 1,
+                "maximum": 720,
+            },
+            "limit": {
+                "type": "integer",
+                "description": "Maximum messages to read",
+                "minimum": 1,
+                "maximum": 200,
+            },
+            "user": {
+                "type": "string",
+                "description": "Only read this chatter's messages",
+            },
+        },
+    }
+
+    def __init__(
+        self,
+        users: UserRepository,
+        messages: ChatMessageRepository,
+        *,
+        bot_id: str,
+        max_messages: int = 200,
+        max_chars: int = 8000,
+    ) -> None:
+        self._users = users
+        self._messages = messages
+        self._bot_id = bot_id
+        self._max_messages = max_messages
+        self._max_chars = max_chars
+
+    async def execute(self, arguments: dict[str, Any], ctx: CommandContext) -> str:
+        offset = _as_int(arguments.get("day_offset"), 0, low=0, high=365)
+        hours = _optional_int(arguments.get("hours"), low=1, high=720)
+        days = _optional_int(arguments.get("since_days"), low=1, high=3650)
+        limit = _as_int(arguments.get("limit"), 100, low=1, high=self._max_messages)
+        now = datetime.now(UTC)
+        if hours is not None:
+            start, end = now - timedelta(hours=hours), now
+        elif days is not None:
+            start, end = now - timedelta(days=days), now
+        else:
+            midnight = now.replace(hour=0, minute=0, second=0, microsecond=0)
+            start = midnight - timedelta(days=offset)
+            end = start + timedelta(days=1)
+
+        user_id: str | None = None
+        raw_name = arguments.get("user")
+        if raw_name:
+            name = str(raw_name).strip().lstrip("@")
+            user = await self._users.get_by_login(name)
+            if user is None:
+                return f"No messages found for {name}."
+            user_id = user.id
+
+        messages = await self._messages.get_channel_history(
+            ctx.channel_id,
+            start=start,
+            end=end,
+            limit=limit,
+            user_id=user_id,
+            exclude_user_ids=(self._bot_id,),
+        )
+        lines = [
+            f"[{message.sent_at:%Y-%m-%d %H:%M}] {message.username}: {message.content}"
+            for message in messages
+        ]
+        return "\n".join(lines)[: self._max_chars] or (
+            "No messages found in that time window."
         )
 
 

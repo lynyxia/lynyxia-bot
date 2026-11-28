@@ -23,6 +23,7 @@ from bot.modules.ai_chat.personas import (
     load_personas,
 )
 from bot.modules.ai_chat.tools import (
+    ChannelHistoryTool,
     ChatMessagesTool,
     ChatterSamplesTool,
     ListChattersTool,
@@ -101,6 +102,10 @@ class AIChatModule(Module):
         if "search_chat" in self.config.tools:
             self._register_tool(
                 SearchChatTool(self._users, self._messages, bot_id=bot_id)
+            )
+        if "channel_history" in self.config.tools:
+            self._register_tool(
+                ChannelHistoryTool(self._users, self._messages, bot_id=bot_id)
             )
 
         self.subscribe(self.context.router.on_command("chatset", self.on_chatset))

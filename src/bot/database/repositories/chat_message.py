@@ -383,6 +383,83 @@ class ChatMessageRepository(BaseRepository):
                 for row in result
             ]
 
+    async def get_channel_history(
+        self,
+        channel_id: str,
+        *,
+        start: datetime,
+        end: datetime,
+        limit: int = 100,
+        user_id: str | None = None,
+        exclude_user_ids: Sequence[str] = (),
+    ) -> Sequence[ChatSample]:
+        """Messages spread evenly across ``[start, end)``, oldest first.
+
+        ``ntile`` divides the window into at most ``limit`` buckets and the
+        first message of each bucket is kept. That summarises a whole day
+        without loading every message from a busy channel into memory.
+        """
+        if limit <= 0:
+            return ()
+        base = select(
+            ChatMessage.user_id,
+            ChatMessage.username,
+            ChatMessage.content,
+            ChatMessage.sent_at,
+        ).where(
+            ChatMessage.channel_id == channel_id,
+            ChatMessage.sent_at >= start,
+            ChatMessage.sent_at < end,
+        )
+        if user_id is not None:
+            base = base.where(ChatMessage.user_id == user_id)
+        if exclude_user_ids:
+            base = base.where(ChatMessage.user_id.not_in(tuple(exclude_user_ids)))
+
+        bucketed = base.subquery("bucketed")
+        with_bucket = select(
+            bucketed.c.user_id,
+            bucketed.c.username,
+            bucketed.c.content,
+            bucketed.c.sent_at,
+            func.ntile(limit)
+            .over(order_by=(bucketed.c.sent_at, bucketed.c.user_id))
+            .label("bucket"),
+        ).subquery("with_bucket")
+        numbered = select(
+            with_bucket.c.user_id,
+            with_bucket.c.username,
+            with_bucket.c.content,
+            with_bucket.c.sent_at,
+            func.row_number()
+            .over(
+                partition_by=with_bucket.c.bucket,
+                order_by=(with_bucket.c.sent_at, with_bucket.c.user_id),
+            )
+            .label("rn"),
+        ).subquery("numbered")
+        stmt = (
+            select(
+                numbered.c.user_id,
+                numbered.c.username,
+                numbered.c.content,
+                numbered.c.sent_at,
+            )
+            .where(numbered.c.rn == 1)
+            .order_by(numbered.c.sent_at, numbered.c.user_id)
+        )
+        async with self.database.session() as session:
+            result = await session.execute(stmt)
+            return [
+                ChatSample(
+                    user_id=row.user_id,
+                    username=row.username,
+                    content=row.content,
+                    sent_at=row.sent_at,
+                )
+                for row in result
+            ]
+
     async def search(
         self,
         channel_id: str,

@@ -231,6 +231,7 @@ def test_config_defaults(settings) -> None:
         "list_chatters",
         "sample_chatter_messages",
         "search_chat",
+        "channel_history",
     ]
     assert config.max_tool_rounds == 5
 
@@ -273,6 +274,7 @@ async def test_default_tools_are_registered(settings, monkeypatch) -> None:
         "list_chatters",
         "sample_chatter_messages",
         "search_chat",
+        "channel_history",
     }
 
 
