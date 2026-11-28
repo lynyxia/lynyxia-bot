@@ -528,6 +528,8 @@ message — and posts one reaction when the pyramid finishes:
 | 16–24 | `Now that's a BIG pyramid! The Pharaoh is considering giving you a promotion. 👑` |
 | 25+ | `HOLY PYRAMIDS!!! We found the eighth wonder of the world!!!.` |
 
+`<user>` in the templates above is rendered as a clickable `@username` mention.
+
 Rules:
 
 - A line counts only if the **whole message** is whitespace-separated copies

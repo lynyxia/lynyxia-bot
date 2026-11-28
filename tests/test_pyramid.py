@@ -62,64 +62,64 @@ def test_parse_chat_line(content: str, expected: tuple[str | None, int]) -> None
     [
         (
             3,
-            "Alice has built a 3-wide Kappa pyramid. "
+            "@Alice has built a 3-wide Kappa pyramid. "
             "That's not a pyramid, surely you can do better!",
         ),
         (
             4,
-            "Alice has built a 4-wide Kappa pyramid. "
+            "@Alice has built a 4-wide Kappa pyramid. "
             "That's not a pyramid, surely you can do better!",
         ),
         (
             5,
-            "Alice has built a 5-wide Kappa pyramid. "
-            "Tiny pyramid detected. The Pharaoh is disappointed, Alice.",
+            "@Alice has built a 5-wide Kappa pyramid. "
+            "Tiny pyramid detected. The Pharaoh is disappointed, @Alice.",
         ),
         (
             7,
-            "Alice has built a 7-wide Kappa pyramid. "
-            "Tiny pyramid detected. The Pharaoh is disappointed, Alice.",
+            "@Alice has built a 7-wide Kappa pyramid. "
+            "Tiny pyramid detected. The Pharaoh is disappointed, @Alice.",
         ),
         (
             8,
-            "Alice has built a 8-wide Kappa pyramid. "
-            "A respectable pyramid. Somewhere, an archaeologist just smiled, Alice.",
+            "@Alice has built a 8-wide Kappa pyramid. "
+            "A respectable pyramid. Somewhere, an archaeologist just smiled, @Alice.",
         ),
         (
             11,
-            "Alice has built a 11-wide Kappa pyramid. "
-            "A respectable pyramid. Somewhere, an archaeologist just smiled, Alice.",
+            "@Alice has built a 11-wide Kappa pyramid. "
+            "A respectable pyramid. Somewhere, an archaeologist just smiled, @Alice.",
         ),
         (
             12,
-            "Alice has built a 12-wide Kappa pyramid! "
-            "Now THAT'S a pyramid! The Egyptians would be proud, Alice.",
+            "@Alice has built a 12-wide Kappa pyramid! "
+            "Now THAT'S a pyramid! The Egyptians would be proud, @Alice.",
         ),
         (
             15,
-            "Alice has built a 15-wide Kappa pyramid! "
-            "Now THAT'S a pyramid! The Egyptians would be proud, Alice.",
+            "@Alice has built a 15-wide Kappa pyramid! "
+            "Now THAT'S a pyramid! The Egyptians would be proud, @Alice.",
         ),
         (
             16,
-            "Alice has built a 16-wide Kappa pyramid!! "
+            "@Alice has built a 16-wide Kappa pyramid!! "
             "Now that's a BIG pyramid! The Pharaoh is considering giving you a "
             "promotion. 👑",
         ),
         (
             24,
-            "Alice has built a 24-wide Kappa pyramid!! "
+            "@Alice has built a 24-wide Kappa pyramid!! "
             "Now that's a BIG pyramid! The Pharaoh is considering giving you a "
             "promotion. 👑",
         ),
         (
             25,
-            "Alice has built a 25-wide Kappa pyramid!!! "
+            "@Alice has built a 25-wide Kappa pyramid!!! "
             "HOLY PYRAMIDS!!! We found the eighth wonder of the world!!!.",
         ),
         (
             30,
-            "Alice has built a 30-wide Kappa pyramid!!! "
+            "@Alice has built a 30-wide Kappa pyramid!!! "
             "HOLY PYRAMIDS!!! We found the eighth wonder of the world!!!.",
         ),
     ],
@@ -148,7 +148,7 @@ def test_middle_contributors_do_not_make_it_stolen() -> None:
         finisher=("Alice", "1"),
     )
     assert outcome.stolen is False
-    assert "Alice" in reaction_text(outcome)
+    assert "@Alice" in reaction_text(outcome)
     assert "SipTime" not in reaction_text(outcome)
 
 
@@ -162,7 +162,7 @@ def test_different_last_author_steals_the_pyramid() -> None:
     )
     assert outcome.stolen is True
     assert reaction_text(outcome) == (
-        "SipTime Well that was rude! Carol just stole a 4 pyramid from Alice!"
+        "SipTime Well that was rude! @Carol just stole a 4 pyramid from @Alice!"
     )
 
 
@@ -192,7 +192,7 @@ def test_deviation_after_peak_collapses_and_names_breaker() -> None:
     outcome = detector.feed(line("hello there", author="Mallory", user_id="9"))
     assert outcome.kind == "collapse"
     assert reaction_text(outcome) == (
-        "FailFish The pyramid has collapsed thanks to Mallory! You have been cursed."
+        "FailFish The pyramid has collapsed thanks to @Mallory! You have been cursed."
     )
 
 
@@ -283,7 +283,7 @@ async def test_module_reacts_through_twitch_service(settings) -> None:
     assert twitch.sent == [
         (
             "7",
-            "Alice has built a 4-wide Kappa pyramid. "
+            "@Alice has built a 4-wide Kappa pyramid. "
             "That's not a pyramid, surely you can do better!",
         )
     ]

@@ -45,17 +45,26 @@ COLLAPSE = (
 STOLEN = "SipTime Well that was rude! {thief} just stole a {width} pyramid from {user}!"
 
 
+def mention(name: str) -> str:
+    """Turn a display name into a clickable Twitch @mention."""
+    if not name or name.startswith("@"):
+        return name
+    return f"@{name}"
+
+
 def reaction_text(outcome: Outcome) -> str:
     """Render the single chat message for a completion or collapse."""
     if outcome.kind == "collapse":
-        return COLLAPSE.format(user=outcome.breaker)
+        return COLLAPSE.format(user=mention(outcome.breaker))
     if outcome.stolen:
         return STOLEN.format(
-            thief=outcome.finisher,
+            thief=mention(outcome.finisher),
             width=outcome.width,
-            user=outcome.starter,
+            user=mention(outcome.starter),
         )
     template = next(
         text for maximum, text in TIERS if maximum is None or outcome.width <= maximum
     )
-    return template.format(user=outcome.starter, width=outcome.width, emote=outcome.emote)
+    return template.format(
+        user=mention(outcome.starter), width=outcome.width, emote=outcome.emote
+    )
