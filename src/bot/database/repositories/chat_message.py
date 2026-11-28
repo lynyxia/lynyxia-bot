@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
+from dataclasses import dataclass
 from datetime import datetime
 
 from sqlalchemy import delete, func, select
@@ -12,6 +13,27 @@ from bot.core.event_router import ChatMessageEvent
 from bot.database.models import Channel, ChatMessage, User
 from bot.database.repositories.base import BaseRepository
 from bot.utils.time import as_utc
+
+
+@dataclass(frozen=True)
+class Chatter:
+    """An active chatter in one channel, for the AI chat discovery tool."""
+
+    user_id: str
+    login: str
+    display_name: str
+    message_count: int
+    last_seen_at: datetime
+
+
+@dataclass(frozen=True)
+class ChatSample:
+    """A message returned by the AI chat sampling and search tools."""
+
+    user_id: str
+    username: str
+    content: str
+    sent_at: datetime
 
 
 def _message_row(event: ChatMessageEvent) -> dict[str, object] | None:
@@ -259,3 +281,143 @@ class ChatMessageRepository(BaseRepository):
         async with self.database.session() as session:
             result = await session.execute(stmt)
             return int(result.scalar_one())
+
+    async def list_chatters(
+        self,
+        channel_id: str,
+        *,
+        since: datetime | None = None,
+        min_messages: int = 1,
+        limit: int = 20,
+        exclude_user_ids: Sequence[str] = (),
+    ) -> Sequence[Chatter]:
+        """Active chatters in one channel, most messages first.
+
+        Powers the AI chat discovery tool: unlike ``get_recent_by_user`` this
+        does not require knowing a username in advance.
+        """
+        message_count = func.count(ChatMessage.id)
+        stmt = (
+            select(
+                User.id,
+                User.login,
+                User.display_name,
+                message_count.label("message_count"),
+                func.max(ChatMessage.sent_at).label("last_seen_at"),
+            )
+            .join(User, ChatMessage.user_id == User.id)
+            .where(ChatMessage.channel_id == channel_id)
+        )
+        if since is not None:
+            stmt = stmt.where(ChatMessage.sent_at >= since)
+        if exclude_user_ids:
+            stmt = stmt.where(ChatMessage.user_id.not_in(tuple(exclude_user_ids)))
+        stmt = (
+            stmt.group_by(User.id, User.login, User.display_name)
+            .having(message_count >= min_messages)
+            .order_by(message_count.desc(), User.login)
+            .limit(limit)
+        )
+        async with self.database.session() as session:
+            result = await session.execute(stmt)
+            return [
+                Chatter(
+                    user_id=row.id,
+                    login=row.login,
+                    display_name=row.display_name,
+                    message_count=int(row.message_count),
+                    last_seen_at=row.last_seen_at,
+                )
+                for row in result
+            ]
+
+    async def get_samples_by_users(
+        self,
+        channel_id: str,
+        user_ids: Sequence[str],
+        *,
+        per_user: int = 3,
+        random: bool = False,
+        since: datetime | None = None,
+    ) -> Sequence[ChatSample]:
+        """A few messages per user in one query, newest or random per user.
+
+        A window function keeps this to a single round trip even when the AI
+        chat tool samples dozens of users in one call.
+        """
+        if not user_ids or per_user <= 0:
+            return ()
+        ordering = func.random() if random else ChatMessage.sent_at.desc()
+        ranked = (
+            select(
+                ChatMessage.user_id,
+                ChatMessage.username,
+                ChatMessage.content,
+                ChatMessage.sent_at,
+                func.row_number()
+                .over(partition_by=ChatMessage.user_id, order_by=ordering)
+                .label("rn"),
+            )
+            .where(
+                ChatMessage.channel_id == channel_id,
+                ChatMessage.user_id.in_(tuple(user_ids)),
+            )
+        )
+        if since is not None:
+            ranked = ranked.where(ChatMessage.sent_at >= since)
+        sub = ranked.subquery("ranked")
+        stmt = (
+            select(sub.c.user_id, sub.c.username, sub.c.content, sub.c.sent_at)
+            .where(sub.c.rn <= per_user)
+            .order_by(sub.c.user_id, sub.c.sent_at.desc())
+        )
+        async with self.database.session() as session:
+            result = await session.execute(stmt)
+            return [
+                ChatSample(
+                    user_id=row.user_id,
+                    username=row.username,
+                    content=row.content,
+                    sent_at=row.sent_at,
+                )
+                for row in result
+            ]
+
+    async def search(
+        self,
+        channel_id: str,
+        term: str,
+        *,
+        since: datetime | None = None,
+        limit: int = 20,
+        user_id: str | None = None,
+        exclude_user_ids: Sequence[str] = (),
+    ) -> Sequence[ChatSample]:
+        """Find messages containing ``term`` in one channel, newest first.
+
+        Wildcards in the user-supplied term are escaped and the whole pattern
+        is bound as a parameter, never interpolated into SQL.
+        """
+        escaped = term.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+        stmt = select(ChatMessage).where(
+            ChatMessage.channel_id == channel_id,
+            ChatMessage.content.ilike(f"%{escaped}%", escape="\\"),
+        )
+        if since is not None:
+            stmt = stmt.where(ChatMessage.sent_at >= since)
+        if user_id is not None:
+            stmt = stmt.where(ChatMessage.user_id == user_id)
+        if exclude_user_ids:
+            stmt = stmt.where(ChatMessage.user_id.not_in(tuple(exclude_user_ids)))
+        stmt = stmt.order_by(ChatMessage.sent_at.desc()).limit(limit)
+        async with self.database.session() as session:
+            result = await session.execute(stmt)
+            return [
+                ChatSample(
+                    user_id=row.user_id,
+                    username=row.username,
+                    content=row.content,
+                    sent_at=row.sent_at,
+                )
+                for row in result
+            ]

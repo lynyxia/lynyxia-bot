@@ -395,6 +395,19 @@ Tools are enabled with the `tools` config array:
   `searxng_url`, timeout and max results).
 - `chat_messages` — reads recent messages for a mentioned user from
   `chat_messages`, capped by `max_context_messages`.
+- `list_chatters` — lists the channel's active chatters with message counts
+  (last 30 days by default), most active first.
+- `sample_chatter_messages` — reads a few recent or random messages from many
+  chatters in one call, so questions like "rank everyone from funniest to least
+  funniest" don't need one lookup per person.
+- `search_chat` — searches this channel's history for a word or phrase,
+  optionally limited to one chatter (e.g. who other people called "cute").
+
+The last three only ever read the **current channel's** history, exclude the
+bot's own messages and cap their output, so they cannot pull data from other
+channels or flood the model's context. The model judges subjective questions
+from that evidence — none of these tools compute a "funniness score". For long
+rankings, raise `max_response_tokens` (default 500, so the reply stays short).
 
 Requests, model reasoning (when the endpoint provides it), tool calls/results
 and final responses are written to `logs/ai.log` via a rotating logger. Docker

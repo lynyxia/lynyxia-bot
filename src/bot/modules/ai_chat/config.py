@@ -12,8 +12,17 @@ class AIChatConfig(BaseModel):
     max_context_messages: int = Field(default=20, ge=1, le=200)
     max_thread_messages: int = Field(default=20, ge=1, le=200)
     max_response_tokens: int = Field(default=500, ge=1, le=8000)
-    max_tool_rounds: int = Field(default=3, ge=1, le=10)
-    tools: list[str] = Field(default_factory=lambda: ["web_search", "chat_messages"])
+    # Three tool calls plus the final answer need four rounds.
+    max_tool_rounds: int = Field(default=5, ge=1, le=10)
+    tools: list[str] = Field(
+        default_factory=lambda: [
+            "web_search",
+            "chat_messages",
+            "list_chatters",
+            "sample_chatter_messages",
+            "search_chat",
+        ]
+    )
     searxng_url: str | None = None
     searxng_timeout_seconds: float = Field(default=10.0, gt=0, le=120)
     searxng_max_results: int = Field(default=5, ge=1, le=50)

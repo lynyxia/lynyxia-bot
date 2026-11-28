@@ -225,7 +225,14 @@ def test_config_defaults(settings) -> None:
     config = AIChatConfig.model_validate(settings.module.get("ai_chat", {}))
     assert config.personas_dir == "personas"
     assert config.default_persona == "generic.md"
-    assert config.tools == ["web_search", "chat_messages"]
+    assert config.tools == [
+        "web_search",
+        "chat_messages",
+        "list_chatters",
+        "sample_chatter_messages",
+        "search_chat",
+    ]
+    assert config.max_tool_rounds == 5
 
 
 def test_persona_name_validation() -> None:
@@ -254,6 +261,19 @@ def test_format_system_prompt_placeholders() -> None:
     assert prompt == (
         "Date 2026-11-22 time 07:30:15 user chatter id 99 keep {other}"
     )
+
+
+async def test_default_tools_are_registered(settings, monkeypatch) -> None:
+    module, _channels, _ = make_module(settings, monkeypatch)
+    await module.setup()
+
+    assert set(module._tool_map) == {
+        "web_search",
+        "chat_messages",
+        "list_chatters",
+        "sample_chatter_messages",
+        "search_chat",
+    }
 
 
 def test_owner_permission(settings) -> None:

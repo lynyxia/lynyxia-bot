@@ -22,7 +22,14 @@ from bot.modules.ai_chat.personas import (
     is_valid_persona_name,
     load_personas,
 )
-from bot.modules.ai_chat.tools import ChatMessagesTool, Tool, WebSearchTool
+from bot.modules.ai_chat.tools import (
+    ChatMessagesTool,
+    ChatterSamplesTool,
+    ListChattersTool,
+    SearchChatTool,
+    Tool,
+    WebSearchTool,
+)
 from bot.modules.base import Module, ModuleContext
 from bot.services.llm import LLMMessage, LLMProvider, ToolDefinition
 
@@ -81,6 +88,19 @@ class AIChatModule(Module):
                     self._messages,
                     max_messages=self.config.max_context_messages,
                 )
+            )
+        bot_id = self.context.settings.twitch.bot_id
+        if "list_chatters" in self.config.tools:
+            self._register_tool(
+                ListChattersTool(self._messages, bot_id=bot_id)
+            )
+        if "sample_chatter_messages" in self.config.tools:
+            self._register_tool(
+                ChatterSamplesTool(self._users, self._messages, bot_id=bot_id)
+            )
+        if "search_chat" in self.config.tools:
+            self._register_tool(
+                SearchChatTool(self._users, self._messages, bot_id=bot_id)
             )
 
         self.subscribe(self.context.router.on_command("chatset", self.on_chatset))
